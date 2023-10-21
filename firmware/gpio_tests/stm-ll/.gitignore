@@ -1,1 +1,2 @@
 cmake-build*
+stm32-cmake/*

@@ -28,7 +28,7 @@ void portAssertHandler( const char *file,
 void setup_gpio_output( void );
 void setup_gpio_input( void );
 
-bool trigger_pending = false;
+volatile bool trigger_pending = false;
 
 /* -------------------------------------------------------------------------- */
 
@@ -42,25 +42,17 @@ int main(void)
 
     while(1)
     {
-//        LL_GPIO_SetOutputPin( GPIOB, LL_GPIO_PIN_0);
-//        LL_mDelay(10);
-//        LL_GPIO_ResetOutputPin( GPIOB, LL_GPIO_PIN_0 );
-//        LL_mDelay(10);
-
 
         if(trigger_pending)
         {
             // GPIO high
             LL_GPIO_SetOutputPin( GPIOB, LL_GPIO_PIN_0);
-//            trigger_pending = false;
-//            LL_mDelay(2);
+            trigger_pending = false;
         }
         else
         {
             // GPIO low
             LL_GPIO_ResetOutputPin( GPIOB, LL_GPIO_PIN_0 );
-//            trigger_pending = true;
-
         }
     }
 
@@ -116,8 +108,7 @@ void setup_gpio_input( void )
 
 void SysTick_Handler(void)
 {
-    trigger_pending = !trigger_pending;
-
+//    trigger_pending = !trigger_pending;
 }
 
 void EXTI0_IRQHandler(void)
@@ -194,7 +185,6 @@ void hal_core_clock_configure( void )
     {
     }
 
-    // 168000000
     LL_Init1msTick( 168000000 );
     LL_SetSystemCoreClock( 168000000 );
 //    LL_RCC_SetTIMPrescaler( LL_RCC_TIM_PRESCALER_TWICE );
