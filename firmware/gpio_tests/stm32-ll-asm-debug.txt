@@ -1,0 +1,29 @@
+Debug - O0g
+
+main:
+	push	{r7, lr}
+	add	r7, sp,                       ; 0
+	bl	0x8000af4                      ; <hal_core_init>
+	bl	0x8000bdc                      ; <hal_core_clock_configure>
+	bl	0x80009fc                      ; <setup_gpio_output>
+	bl	0x8000a48                      ; <setup_gpio_input>
+	ldr	r3, [pc,                      ; 32]	@ (0x80009f4 <main+56>)
+	ldrb	r3, [r3,                     ; 0]
+	uxtb	r3, r3
+	cmp	r3,                           ; 0
+	beq.n	0x80009ea                   ; <main+46>
+	movs	r1,                          ; 1
+	ldr	r0, [pc,                      ; 24]	@ (0x80009f8 <main+60>)
+	bl	0x80008ee                      ; <LL_GPIO_SetOutputPin>
+	ldr	r3, [pc,                      ; 16]	@ (0x80009f4 <main+56>)
+	movs	r2,                          ; 0
+	strb	r2, [r3,                     ; 0]
+	b.n	0x80009d0                     ; <main+20>
+	movs	r1,                          ; 1
+	ldr	r0, [pc,                      ; 8]	@ (0x80009f8 <main+60>)
+	bl	0x800090a                      ; <LL_GPIO_ResetOutputPin>
+	b.n	0x80009d0                     ; <main+20>
+	movs	r4, r4
+	movs	r0,                          ; 0
+	lsls	r0, r0,                      ; 16
+	ands	r2, r0

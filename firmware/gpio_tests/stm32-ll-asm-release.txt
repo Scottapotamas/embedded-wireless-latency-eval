@@ -1,0 +1,26 @@
+Release - O3
+
+main:
+	push	{r3, lr}
+	bl	0x800039c                      ; <hal_core_init>
+	bl	0x8000428                      ; <hal_core_clock_configure>
+	bl	0x80001ec                      ; <setup_gpio_output>
+	bl	0x80002a4                      ; <setup_gpio_input>
+	ldr	r2, [pc,                      ; 28]	@ (0x8000554 <main+48>)
+	ldr	r1, [pc,                      ; 28]	@ (0x8000558 <main+52>)
+	mov.w	r5,                         ; 65536	@ 0x10000
+	movs	r4,                          ; 1
+	movs	r0,                          ; 0
+	ldrb	r3, [r2,                     ; 0]
+	cbz	r3, 0x8000550                 ; <main+44>
+	str	r4, [r1,                      ; 24]
+	strb	r0, [r2,                     ; 0]
+	ldrb	r3, [r2,                     ; 0]
+	cmp	r3,                           ; 0
+	bne.n	0x8000546                   ; <main+34>
+	str	r5, [r1,                      ; 24]
+	b.n	0x8000542                     ; <main+30>
+	movs	r4, r4
+	movs	r0,                          ; 0
+	lsls	r0, r0,                      ; 16
+	ands	r2, r0

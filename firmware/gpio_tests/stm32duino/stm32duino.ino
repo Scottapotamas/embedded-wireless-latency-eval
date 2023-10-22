@@ -19,19 +19,14 @@ void externalTrigger( void )
 void loop( void )
 {
 
-      digitalWrite(PB0, HIGH);
-  delay(1);
-        digitalWrite(PB0, LOW);
-  delay(1);
-//
-//  if( trigger_pending )
-//  {
-//    digitalWrite(PB0, HIGH);
-//    trigger_pending = false;
-//  }
-//  else
-//  {
-//    digitalWrite(PB0, LOW);
-//  }
+  if( trigger_pending )
+  {
+    digitalWrite(PB0, HIGH);
+    trigger_pending = false;
+  }
+  else
+  {
+    digitalWrite(PB0, LOW);
+  }
 
 }
