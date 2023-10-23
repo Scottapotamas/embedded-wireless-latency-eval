@@ -84,31 +84,23 @@ int main(void)
                 if(rx_tmp[i] == 0xEE )
                 {
                     LL_GPIO_SetOutputPin( GPIOB, LL_GPIO_PIN_0 );
-                    asm("NOP");
-                    asm("NOP");
-                    asm("NOP");
-                    asm("NOP");
-                    asm("NOP");
-                    asm("NOP");
-
                 }
             }
-//            LL_mDelay(1);
             LL_GPIO_ResetOutputPin( GPIOB, LL_GPIO_PIN_0 );
         }
 
         if(trigger_pending)
         {
             // GPIO high
-            LL_GPIO_SetOutputPin( GPIOB, LL_GPIO_PIN_0);
+//            LL_GPIO_SetOutputPin( GPIOB, LL_GPIO_PIN_0);
             hal_uart_write( short_string, sizeof(short_string) );
-            LL_GPIO_ResetOutputPin( GPIOB, LL_GPIO_PIN_0 );
+//            LL_GPIO_ResetOutputPin( GPIOB, LL_GPIO_PIN_0 );
             trigger_pending = false;
         }
         else
         {
             // GPIO low
-            LL_GPIO_ResetOutputPin( GPIOB, LL_GPIO_PIN_0 );
+//            LL_GPIO_ResetOutputPin( GPIOB, LL_GPIO_PIN_0 );
         }
     }
 

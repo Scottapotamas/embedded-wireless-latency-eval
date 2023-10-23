@@ -23,9 +23,11 @@ uint16_t tx_sneak_bytes;
 fifo_t  rx_fifo = { 0 };
 uint8_t rx_buffer[HAL_UART_RX_FIFO_SIZE];
 
+#ifdef UART_DMA
 // Raw DMA buffer,
 volatile uint8_t dma_rx_buffer[HAL_UART_RX_DMA_BUFFER_SIZE];
 uint32_t dma_rx_pos = 0;
+#endif
 
 static void hal_uart_start_tx( void );
 static void hal_usart_irq_rx_handler( void );
@@ -41,7 +43,9 @@ void uart_init( void )
     // Prepare buffers
     memset( tx_buffer, 0, sizeof(tx_buffer) );
     memset( rx_buffer, 0, sizeof(rx_fifo) );
+#ifdef UART_DMA
     memset( (uint8_t*)dma_rx_buffer, 0, sizeof(dma_rx_buffer) );
+#endif
     fifo_init( &tx_fifo, &tx_buffer[0], HAL_UART_TX_FIFO_SIZE );
     fifo_init( &rx_fifo, &rx_buffer[0], HAL_UART_RX_FIFO_SIZE );
 
@@ -113,7 +117,6 @@ void uart_init( void )
 
     NVIC_SetPriority( DMA1_Stream0_IRQn, 2 );
     NVIC_EnableIRQ( DMA1_Stream0_IRQn );
-
 #endif
 
     // Common UART config
@@ -144,9 +147,10 @@ void uart_init( void )
 #endif
 
 #ifdef UART_IRQ
-    LL_USART_Enable( UART5 );
-    LL_USART_EnableIT_IDLE( UART5 );
+    LL_USART_EnableIT_TXE(UART5);
+    LL_USART_EnableIT_RXNE(UART5);
 
+    LL_USART_Enable( UART5 );
 #endif
 
 #ifdef UART_DMA
@@ -211,6 +215,34 @@ static void hal_uart_start_tx( void )
     primask = __get_PRIMASK();
     __disable_irq();
 
+#ifdef UART_POLL
+    uint8_t byte = 0;
+
+    while( fifo_read( &tx_fifo, &byte, 1 ) )
+    {
+        // Send it
+        LL_USART_TransmitData9(UART5, byte);
+
+        // Poll until it's complete - this is blocking behaviour
+        while( !LL_USART_IsActiveFlag_TXE(UART5) )
+        {
+            asm("NOP");
+        }
+    }
+#endif
+
+#ifdef UART_IRQ
+    uint8_t byte = 0;
+
+    if( fifo_read( &tx_fifo, &byte, 1 ) )
+    {
+        // Send it
+        LL_USART_TransmitData9(UART5, byte);
+        LL_USART_EnableIT_TXE(UART5);
+    }
+#endif
+
+#ifdef UART_DMA
     /* If transfer is not ongoing */
     if( !LL_DMA_IsEnabledStream( DMA1, LL_DMA_STREAM_7 ) )
     {
@@ -242,16 +274,28 @@ static void hal_uart_start_tx( void )
             LL_DMA_EnableStream( DMA1, LL_DMA_STREAM_7 );
         }
     }
+#endif
 
     __set_PRIMASK( primask );
 }
 
 /* ------------------------------------------------------------------*/
 
-// Tracks data handled by RX DMA and passes data off for higher-level storage/parsing etc.
-// Called when the RX DMA interrupts for half or full buffer fire, and when line-idle occurs
 static void hal_usart_irq_rx_handler( void )
 {
+#ifdef UART_POLL
+
+#endif
+
+#ifdef UART_IRQ
+    uint8_t rx_byte = (uint8_t)LL_USART_ReceiveData9(UART5);
+    fifo_put(&rx_fifo, rx_byte);
+#endif
+
+#ifdef UART_DMA
+    // Tracks data handled by RX DMA and passes data off for higher-level storage/parsing etc.
+    // Called when the RX DMA interrupts for half or full buffer fire, and when line-idle occurs
+
     // Calculate current head index
     uint32_t current_pos = HAL_UART_RX_DMA_BUFFER_SIZE - LL_DMA_GetDataLength( DMA1, LL_DMA_STREAM_0 );
 
@@ -283,12 +327,31 @@ static void hal_usart_irq_rx_handler( void )
     {
         dma_rx_pos = 0;
     }
+#endif
 }
 
 /* ------------------------------------------------------------------*/
 
 void UART5_IRQHandler( void )
 {
+#ifdef UART_IRQ
+    // Check tx empty flag
+    if(LL_USART_IsEnabledIT_TXE(UART5) && LL_USART_IsActiveFlag_TXE(UART5) )
+    {
+        LL_USART_ClearFlag_TC(UART5);
+        LL_USART_DisableIT_TXE(UART5);
+
+        // Check for more data to send
+        hal_uart_start_tx();
+    }
+
+    if(LL_USART_IsEnabledIT_RXNE(UART5) && LL_USART_IsActiveFlag_RXNE(UART5) )
+    {
+        LL_USART_ClearFlag_RXNE(UART5);
+        hal_usart_irq_rx_handler();
+    }
+#endif
+
     // Idle line interrupt occurs when the UART RX line has been high for more than one frame
     if( LL_USART_IsEnabledIT_IDLE( UART5 ) && LL_USART_IsActiveFlag_IDLE( UART5 ) )
     {
@@ -300,6 +363,7 @@ void UART5_IRQHandler( void )
     }
 }
 
+#ifdef UART_DMA
 // RX
 void DMA1_Stream0_IRQHandler( void )
 {
@@ -331,6 +395,7 @@ void DMA1_Stream7_IRQHandler( void )
         hal_uart_start_tx();
     }
 }
+#endif
 
 /* ------------------------------------------------------------------*/
 
