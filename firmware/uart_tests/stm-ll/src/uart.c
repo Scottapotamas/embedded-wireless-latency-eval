@@ -30,7 +30,7 @@ uint32_t dma_rx_pos = 0;
 #endif
 
 static void hal_uart_start_tx( void );
-static void hal_usart_irq_rx_handler( void );
+static void hal_usart_rx_handler( void );
 
 // This function is responsible for setting up the UART5 in any selected operating mode
 void uart_init( void )
@@ -186,6 +186,9 @@ uint32_t hal_uart_write( const uint8_t *data, uint32_t length )
 
 uint32_t hal_uart_rx_data_available( void )
 {
+#ifdef UART_POLL
+    hal_usart_rx_handler();
+#endif
     return fifo_used( &rx_fifo );
 }
 
@@ -226,7 +229,7 @@ static void hal_uart_start_tx( void )
         // Poll until it's complete - this is blocking behaviour
         while( !LL_USART_IsActiveFlag_TXE(UART5) )
         {
-            asm("NOP");
+            hal_usart_rx_handler();
         }
     }
 #endif
@@ -281,10 +284,15 @@ static void hal_uart_start_tx( void )
 
 /* ------------------------------------------------------------------*/
 
-static void hal_usart_irq_rx_handler( void )
+static void hal_usart_rx_handler( void )
 {
 #ifdef UART_POLL
-
+    if( LL_USART_IsActiveFlag_RXNE(UART5) )
+    {
+        LL_USART_ClearFlag_RXNE(UART5);
+        uint8_t rx_byte = (uint8_t)LL_USART_ReceiveData9(UART5);
+        fifo_put(&rx_fifo, rx_byte);
+    }
 #endif
 
 #ifdef UART_IRQ
@@ -348,7 +356,7 @@ void UART5_IRQHandler( void )
     if(LL_USART_IsEnabledIT_RXNE(UART5) && LL_USART_IsActiveFlag_RXNE(UART5) )
     {
         LL_USART_ClearFlag_RXNE(UART5);
-        hal_usart_irq_rx_handler();
+        hal_usart_rx_handler();
     }
 #endif
 
@@ -359,7 +367,7 @@ void UART5_IRQHandler( void )
         LL_USART_ClearFlag_IDLE( UART5 );
 
         // Check for data to process
-        hal_usart_irq_rx_handler();
+        hal_usart_rx_handler();
     }
 }
 
@@ -398,33 +406,3 @@ void DMA1_Stream7_IRQHandler( void )
 #endif
 
 /* ------------------------------------------------------------------*/
-
-// IRQ
-/*
-void UART4_IRQHandler( void )
-{
-    *//* RECEIVE HANDLING *//*
-    if( __HAL_UART_GET_FLAG( &h->usart, UART_FLAG_RXNE ) )
-    {
-        uint8_t c = (uint8_t)h->usart.Instance->DR;
-        fifo_write( &h->rx_fifo, &c, 1 );
-    }
-
-    *//* TRANSMIT HANDLING *//*
-    if( __HAL_UART_GET_FLAG( &h->usart, UART_FLAG_TXE ) )
-    {
-        if( fifo_used( &tx_fifo ) > 0 )
-        {
-            *//* Transmit next available character *//*
-            uint8_t c;
-            fifo_read( &tx_fifo, &c, 1 );
-            h->usart.Instance->DR = c;
-        }
-        else
-        {
-            *//* Stop transmit interrupts *//*
-            __HAL_UART_DISABLE_IT( &h->usart, UART_IT_TXE );
-        }
-    }
-}
-*/

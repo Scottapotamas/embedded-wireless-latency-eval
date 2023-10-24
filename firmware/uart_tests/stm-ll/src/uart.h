@@ -27,4 +27,6 @@ uint8_t hal_uart_rx_get( void );
  */
 uint32_t hal_uart_read( uint8_t *buffer, uint32_t bufferlen );
 
+/* -------------------------------------------------------------------------- */
+
 #endif //UART_H
