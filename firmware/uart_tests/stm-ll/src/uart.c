@@ -379,14 +379,14 @@ void DMA1_Stream0_IRQHandler( void )
     if( LL_DMA_IsEnabledIT_HT( DMA1, LL_DMA_STREAM_0 ) && LL_DMA_IsActiveFlag_HT0( DMA1 ) )
     {
         LL_DMA_ClearFlag_HT0( DMA1 );
-        hal_usart_irq_rx_handler();
+        hal_usart_rx_handler();
     }
 
     // Full transfer complete
     if( LL_DMA_IsEnabledIT_TC( DMA1, LL_DMA_STREAM_0 ) && LL_DMA_IsActiveFlag_TC0( DMA1 ) )
     {
         LL_DMA_ClearFlag_TC0( DMA1 );
-        hal_usart_irq_rx_handler();
+        hal_usart_rx_handler();
     }
 }
 
