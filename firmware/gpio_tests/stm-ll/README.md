@@ -4,6 +4,9 @@ This is a super-minimal test program that waits for the trigger signal via EXTI 
 
 This is for comparison against Arduino and STCubeMX HAL implementation.
 
+- PA0 is driven with a 3.3V trigger pulse from my sig-gen.
+- PB0 is a 3.3V output signal (also connected to the nucleo's onboard green LED)
+
 ## Deps
 
 I use CMake with CLion for development/builds, so this project is slightly opinionated.

@@ -8,6 +8,12 @@ This is only meant to serve to highlight differences in handling/latency and not
 - efficiency (both power, and in code)
 - performance with higher baud links
 
+IO Setup:
+
+- PA0 is driven with a 3.3V trigger pulse from my sig-gen.
+- PB0 is a 3.3V output signal (also connected to the nucleo's onboard green LED)
+- UART5 is used with PD2 as RX, and PC12 as TX
+
 ## Deps
 
 I use CMake with CLion for development/builds, so this project is slightly opinionated.
