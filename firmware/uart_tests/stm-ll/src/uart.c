@@ -9,10 +9,16 @@
 #include "uart.h"
 #include "fifo.h"
 
-#define UART5_BAUD (115200)
+#define UART5_BAUD (57600)
+//#define UART5_BAUD (115200)
+//#define UART5_BAUD (230400)
+//#define UART5_BAUD (460800)
+//#define UART5_BAUD (921600)
+//#define UART5_BAUD (1843200)
+//#define UART5_BAUD (2764800)
 
-#define HAL_UART_TX_FIFO_SIZE 128
-#define HAL_UART_RX_FIFO_SIZE 128
+#define HAL_UART_TX_FIFO_SIZE 2048
+#define HAL_UART_RX_FIFO_SIZE 2048
 #define HAL_UART_RX_DMA_BUFFER_SIZE 32
 
 // User-space buffers are serviced outside IRQ

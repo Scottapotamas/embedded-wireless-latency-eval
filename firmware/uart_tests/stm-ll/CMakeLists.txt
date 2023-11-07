@@ -30,8 +30,13 @@ add_definitions(-DHSE_VALUE=8000000)
 add_definitions(-DLSE_VALUE=32768)
 
 #add_definitions(-DUART_POLL)
-#add_definitions(-DUART_IRQ)
-add_definitions(-DUART_DMA)
+add_definitions(-DUART_IRQ)
+#add_definitions(-DUART_DMA)
+
+#add_definitions(-DPAYLOAD_12B)
+#add_definitions(-DPAYLOAD_128B)
+add_definitions(-DPAYLOAD_1024B)
+
 
 add_executable(${PROJ_NAME})
 
