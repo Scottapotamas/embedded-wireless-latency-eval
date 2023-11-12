@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-set(PROJ_NAME gpio-irq-test)
+set(PROJ_NAME uart-test)
 set(STM32_CMAKE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/stm32-cmake)
 set(CMAKE_TOOLCHAIN_FILE ${STM32_CMAKE_PATH}/cmake/stm32_gcc.cmake)
 
