@@ -19,27 +19,6 @@ menu "Example Configuration"
         help
             The channel on which sending and receiving ESPNOW data.
 
-    config ESPNOW_SEND_COUNT
-        int "Send count"
-        default 100
-        range 1 65535
-        help
-            Total count of unicast ESPNOW data to be sent.
-
-    config ESPNOW_SEND_DELAY
-        int "Send delay"
-        default 1000
-        range 0 65535
-        help
-            Delay between sending two ESPNOW data, unit: ms.
-
-    config ESPNOW_SEND_LEN
-        int "Send len"
-        range 10 250
-        default 10
-        help
-            Length of ESPNOW data to be sent, unit: byte.
-
     config ESPNOW_ENABLE_LONG_RANGE
         bool "Enable Long Range"
         default "n"

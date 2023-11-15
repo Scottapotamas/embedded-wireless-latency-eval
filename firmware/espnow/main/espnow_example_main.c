@@ -22,15 +22,34 @@
 
 /* -------------------------------------------------------------------------- */
 
-
+// Packet size test length settings
 #define PAYLOAD_12B
 // #define PAYLOAD_128B
-// #define PAYLOAD_1024B
+//#define PAYLOAD_1024B
 
+/* -------------------------------------------------------------------------- */
 
-#define ESPNOW_QUEUE_SIZE           6
+// Test stimulus input pin
+#define GPIO_INPUT_IO_0     19
+#define GPIO_INPUT_PIN_SEL  ((1ULL<<GPIO_INPUT_IO_0))
+
+// Status output pin
+#define GPIO_OUTPUT_IO_0    18
+#define GPIO_OUTPUT_IO_LED  2   // onboard LED signals if the board has added a peer
+
+#define GPIO_OUTPUT_PIN_SEL  ((1ULL<<GPIO_OUTPUT_IO_0) | (1ULL<<GPIO_OUTPUT_IO_LED))
+
+#define ESP_INTR_FLAG_DEFAULT 0
+
+/* -------------------------------------------------------------------------- */
+
+// ESPnow settings
+#define MAX_ESPNOW_PAYLOAD_BYTES (250)
+#define ESPNOW_QUEUE_SIZE (8)
 
 #define IS_BROADCAST_ADDR(addr) (memcmp(addr, s_example_broadcast_mac, ESP_NOW_ETH_ALEN) == 0)
+
+/* -------------------------------------------------------------------------- */
 
 typedef enum {
     EXAMPLE_ESPNOW_SEND_CB,
@@ -54,7 +73,8 @@ typedef union {
     example_espnow_event_recv_cb_t recv_cb;
 } example_espnow_event_info_t;
 
-/* When ESPNOW sending or receiving callback function is called, post event to ESPNOW task. */
+// Main task queue needs to support send and receive events
+// The ID field helps distinguish between them
 typedef struct {
     example_espnow_event_id_t id;
     example_espnow_event_info_t info;
@@ -66,59 +86,18 @@ enum {
     EXAMPLE_ESPNOW_DATA_MAX,
 };
 
-/* User defined field of ESPNOW data in this example. */
-typedef struct {
-    uint8_t payload[0];                   // Real payload of ESPNOW data.
-} __attribute__((packed)) example_espnow_data_t;
-
-/* Parameters of sending ESPNOW data. */
 typedef struct {
     int len;                              // Length of ESPNOW data to be sent, unit: byte.
     uint8_t *buffer;                      // Buffer pointing to ESPNOW data.
     uint8_t dest_mac[ESP_NOW_ETH_ALEN];   // MAC address of destination device.
 } example_espnow_send_param_t;
 
-// TODO: cleanup
-/* -------------------------------------------------------------------------- */
-
-
-
-// Test stimulus input pin
-#define GPIO_INPUT_IO_0     19
-#define GPIO_INPUT_PIN_SEL  ((1ULL<<GPIO_INPUT_IO_0))
-
-// Status output pin
-#define GPIO_OUTPUT_IO_0    18
-#define GPIO_OUTPUT_PIN_SEL  ((1ULL<<GPIO_OUTPUT_IO_0))
-
-#define ESP_INTR_FLAG_DEFAULT 0
-
 /* -------------------------------------------------------------------------- */
 
 static const char *TAG = "espnow_example";
 
 static QueueHandle_t s_example_espnow_queue;
-
 static uint8_t s_example_broadcast_mac[ESP_NOW_ETH_ALEN] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
-
-/* -------------------------------------------------------------------------- */
-
-static void setup_gpio_output( void );
-static void setup_gpio_input( void );
-static void IRAM_ATTR gpio_isr_handler(void* arg);
-
-static void crc16(uint8_t data, uint16_t *crc);
-
-static void wifi_init(void);
-static esp_err_t espnow_init(void);
-static void example_espnow_deinit(example_espnow_send_param_t *send_param);
-
-static void example_espnow_send_cb(const uint8_t *mac_addr, esp_now_send_status_t status);
-static void example_espnow_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len);
-
-static void broadcast_for_peers( example_espnow_send_param_t *send_param );
-
-static void example_espnow_task(void *pvParameter);
 
 /* -------------------------------------------------------------------------- */
 
@@ -269,6 +248,23 @@ uint16_t payload_crc = 0x00;
 
 /* -------------------------------------------------------------------------- */
 
+static void setup_gpio_output( void );
+static void setup_gpio_input( void );
+static void IRAM_ATTR gpio_isr_handler(void* arg);
+
+static void crc16(uint8_t data, uint16_t *crc);
+
+static void wifi_init(void);
+static esp_err_t espnow_init(void);
+static void example_espnow_deinit(example_espnow_send_param_t *send_param);
+
+static void example_espnow_send_cb(const uint8_t *mac_addr, esp_now_send_status_t status);
+static void example_espnow_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len);
+static void broadcast_for_peers( example_espnow_send_param_t *send_param );
+static void example_espnow_task(void *pvParameter);
+
+/* -------------------------------------------------------------------------- */
+
 void setup_gpio_output( void )
 {
     gpio_config_t io_conf = {};
@@ -385,8 +381,8 @@ static esp_err_t espnow_init(void)
     }
 
     memset(send_param, 0, sizeof(example_espnow_send_param_t));
-    send_param->len = CONFIG_ESPNOW_SEND_LEN;
-    send_param->buffer = malloc(CONFIG_ESPNOW_SEND_LEN);
+    send_param->len = MAX_ESPNOW_PAYLOAD_BYTES;
+    send_param->buffer = malloc(MAX_ESPNOW_PAYLOAD_BYTES);
     if (send_param->buffer == NULL) {
         ESP_LOGE(TAG, "Malloc send buffer fail");
         free(send_param);
@@ -426,7 +422,7 @@ static void example_espnow_send_cb(const uint8_t *mac_addr, esp_now_send_status_
     memcpy(send_cb->mac_addr, mac_addr, ESP_NOW_ETH_ALEN);
     send_cb->status = status;
     
-    if(xQueueSend(s_example_espnow_queue, &evt, 128) != pdTRUE)
+    if(xQueueSend(s_example_espnow_queue, &evt, 512) != pdTRUE)
     {
         ESP_LOGW(TAG, "Send send queue fail");
     }
@@ -495,12 +491,13 @@ static void broadcast_for_peers( example_espnow_send_param_t *send_param )
     }
 }
 
+/* -------------------------------------------------------------------------- */
+
 static void example_espnow_task(void *pvParameter)
 {
     example_espnow_send_param_t *send_param = (example_espnow_send_param_t *)pvParameter;
     example_espnow_event_t evt;
-    bool is_broadcast = false;
-    int ret;
+    uint16_t bytes_sent = 0;
 
     // Spend some time broadcasting so the other ESP32 can add us to it's peer list
     broadcast_for_peers( send_param );
@@ -512,7 +509,7 @@ static void example_espnow_task(void *pvParameter)
         {
             // Get the candidate device we want to send to
             esp_now_peer_info_t *peer = malloc( sizeof(esp_now_peer_info_t) );
-            if (peer == NULL)
+            if( peer == NULL )
             {
                 ESP_LOGE(TAG, "Malloc peer information fail");
                 example_espnow_deinit(send_param);
@@ -527,9 +524,18 @@ static void example_espnow_task(void *pvParameter)
                 // Send an unicast ESPNOW packet to the peer we met during startup
                 memcpy(send_param->dest_mac, peer->peer_addr, ESP_NOW_ETH_ALEN);
 
-                // Copy our test data into the packet
-                memcpy( send_param->buffer, test_payload, sizeof(test_payload) );
-                send_param->len = sizeof(test_payload);
+                // Chunk large payloads into 250 byte packets
+                bytes_sent = 0;
+                uint16_t bytes_to_send = sizeof(test_payload) - bytes_sent;
+                if( bytes_to_send > MAX_ESPNOW_PAYLOAD_BYTES )
+                {
+                    bytes_to_send = MAX_ESPNOW_PAYLOAD_BYTES;
+                }
+
+//                ESP_LOGI(TAG, "Trigger sending %d len %d", bytes_sent, bytes_to_send);
+
+                send_param->len = bytes_to_send;
+                memcpy( send_param->buffer, &test_payload[bytes_sent], bytes_to_send );
 
                 if( esp_now_send(send_param->dest_mac, send_param->buffer, send_param->len) != ESP_OK )
                 {
@@ -537,6 +543,9 @@ static void example_espnow_task(void *pvParameter)
                     example_espnow_deinit(send_param);
                     vTaskDelete(NULL);
                 }
+
+                bytes_sent += bytes_to_send;
+
             }
 
             // Cleanup
@@ -553,6 +562,7 @@ static void example_espnow_task(void *pvParameter)
                 case EXAMPLE_ESPNOW_SEND_CB:
                 {
                     example_espnow_event_send_cb_t *send_cb = &evt.info.send_cb;
+                    // ESP_LOGI(TAG, "Sent data on "MACSTR", status1: %d", MAC2STR(send_cb->mac_addr), send_cb->status);
 
                     if( IS_BROADCAST_ADDR(send_cb->mac_addr) )
                     {
@@ -560,9 +570,29 @@ static void example_espnow_task(void *pvParameter)
                         break;
                     }
 
-                    // TODO: send the rest of the chunks if dealing with large packets?
-                    ESP_LOGD(TAG, "Sent to "MACSTR", status1: %d", MAC2STR(send_cb->mac_addr), send_cb->status);
+                    // Send the next chunk if needed
+                    if( bytes_sent < sizeof(test_payload) )
+                    {
+                        uint16_t bytes_to_send = sizeof(test_payload) - bytes_sent;
+                        if( bytes_to_send > MAX_ESPNOW_PAYLOAD_BYTES )
+                        {
+                            bytes_to_send = MAX_ESPNOW_PAYLOAD_BYTES;
+                        }
 
+                        // ESP_LOGI(TAG, "Chunk starting %d len %d", bytes_sent, bytes_to_send);
+                        send_param->len = bytes_to_send;
+                        memcpy( send_param->buffer, &test_payload[bytes_sent], bytes_to_send );
+
+                        if( esp_now_send(send_param->dest_mac, send_param->buffer, send_param->len) != ESP_OK )
+                        {
+                            ESP_LOGE(TAG, "Send error");
+                            example_espnow_deinit(send_param);
+                            vTaskDelete(NULL);
+                        }
+
+                        // Update the total bytes sent
+                        bytes_sent += bytes_to_send;
+                    }
 
                     break;
                 } // end tx callback handling
@@ -580,6 +610,7 @@ static void example_espnow_task(void *pvParameter)
                         if( !esp_now_is_peer_exist(recv_cb->src_addr) )
                         {
                             ESP_LOGI(TAG, "  Adding it as a peer");
+                            gpio_set_level( GPIO_OUTPUT_IO_LED, 1 );
 
                             esp_now_peer_info_t *peer = malloc(sizeof(esp_now_peer_info_t));
                             if (peer == NULL)
@@ -623,8 +654,6 @@ static void example_espnow_task(void *pvParameter)
                             {
                                 // Valid test structure
                                 gpio_set_level( GPIO_OUTPUT_IO_0, 1 );
-                                ESP_LOGI(TAG, "--- PACKET VALID ---");
-
                             }
                         }
 
