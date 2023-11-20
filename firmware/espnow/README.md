@@ -11,6 +11,11 @@ This is based on Espressif's example espnow project. I simplified it and made so
 This firmware doesn't handle error cases particularly well, and isn't particularly refined.
 It's intended to work well enough in lab conditions (ideal) and little else.
 
+IO Setup:
+
+- IO19 is driven with a 3.3V trigger pulse from my sig-gen.
+- IO18 is a 3.3V output signal
+
 ## Firwmare
 
 Developed using CLion, and I run my IDF development environment via docker container:
