@@ -14,7 +14,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define NRF24L01P_PAYLOAD_LENGTH          8     // 1 - 32bytes
+#define NRF24L01P_PAYLOAD_LENGTH          12     // 1 - 32bytes
 
 /* nRF24L01+ typedefs */
 typedef uint8_t count;

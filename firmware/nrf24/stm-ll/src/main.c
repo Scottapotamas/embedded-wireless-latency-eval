@@ -1,5 +1,6 @@
 /* -------------------------------------------------------------------------- */
 
+#include <string.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -182,11 +183,11 @@ uint16_t payload_crc = 0x00;
 
 /* -------------------------------------------------------------------------- */
 
-#define TRANSMITTER
-//#define RECEIVER
+//#define TRANSMITTER
+#define RECEIVER
 
-uint8_t rx_data[NRF24L01P_PAYLOAD_LENGTH] = {0};
-uint8_t tx_data[NRF24L01P_PAYLOAD_LENGTH] = {0, 1, 2, 3, 4, 5, 6, 7};
+volatile uint8_t rx_tmp[32] = {0};
+volatile uint8_t bytes_held = 0;
 
 /* -------------------------------------------------------------------------- */
 
@@ -212,10 +213,6 @@ int main(void)
     payload_crc = working_crc;
     working_crc = CRC_SEED;
 
-    volatile uint8_t rx_tmp[32] = {0};
-    uint8_t bytes_held = 0;
-
-
 #ifdef RECEIVER
     nrf24l01p_rx_init(2500, _1Mbps);
 #endif
@@ -224,28 +221,13 @@ int main(void)
     nrf24l01p_tx_init(2500, _1Mbps);
 #endif
 
-    LL_mDelay(10);
+    LL_mDelay(5);
 
     while(1)
     {
-
-#ifdef TRANSMITTER
-        for(int i= 0; i < 8; i++)
+        if( bytes_held )
         {
-            tx_data[i]++;
-        }
-
-        nrf24l01p_tx_transmit(tx_data);
-        LL_mDelay(10);
-
-#endif
-
-        /*
-        if( hal_uart_rx_data_available() )
-        {
-            bytes_held = hal_uart_read( (uint8_t*)&rx_tmp, 32 );
-
-            for( uint8_t i = 0; i < bytes_held; i++ )
+            for( uint8_t i = 0; i < NRF24L01P_PAYLOAD_LENGTH; i++ )
             {
                 // Reset the "parser"
                 if(rx_tmp[i] == 0x00 )
@@ -264,15 +246,19 @@ int main(void)
                 }
 
             }
+
+            bytes_held = 0;
+            memset(rx_tmp, 0, sizeof(rx_tmp));
+
             LL_GPIO_ResetOutputPin( GPIOB, LL_GPIO_PIN_0 );
         }
-         */
 
         if(trigger_pending)
         {
-            // Put the payload in the outbound fifo
-            //hal_uart_write( test_payload, sizeof(test_payload) );
-            LL_GPIO_SetOutputPin( GPIOB, LL_GPIO_PIN_0 );
+            // Send a packet
+            nrf24l01p_tx_transmit(test_payload);
+
+//            LL_GPIO_SetOutputPin( GPIOB, LL_GPIO_PIN_0 );
             trigger_pending = false;
         }
         else
@@ -284,9 +270,6 @@ int main(void)
 
     return 0;
 }
-
-
-
 
 /* -------------------------------------------------------------------------- */
 
@@ -361,7 +344,7 @@ void setup_nrf24_io( void )
     LL_GPIO_SetPinMode( GPIOB, LL_GPIO_PIN_3, LL_GPIO_MODE_INPUT );
     LL_GPIO_SetPinSpeed( GPIOB, LL_GPIO_PIN_3, LL_GPIO_SPEED_FREQ_MEDIUM );
     LL_GPIO_SetPinOutputType( GPIOB, LL_GPIO_PIN_3, LL_GPIO_MODE_INPUT );
-    LL_GPIO_SetPinPull( GPIOB, LL_GPIO_PIN_3, LL_GPIO_PULL_UP );
+    LL_GPIO_SetPinPull( GPIOB, LL_GPIO_PIN_3, LL_GPIO_PULL_NO );
     LL_GPIO_ResetOutputPin( GPIOB, LL_GPIO_PIN_3 );
 
     // EXTI1 setup
@@ -383,14 +366,7 @@ void setup_nrf24_io( void )
 
 }
 
-unsigned char test_spi_write(unsigned char data)
-{
-//    while(!LL_SPI_IsActiveFlag_BSY(SPI1));
-    while(LL_SPI_IsActiveFlag_TXE(SPI1)==RESET);
-    LL_SPI_TransmitData8(SPI1, data);
-    while(LL_SPI_IsActiveFlag_RXNE(SPI1)==RESET);
-    return LL_SPI_ReceiveData8(SPI1);
-}
+/* -------------------------------------------------------------------------- */
 
 void setup_spi( void )
 {
@@ -470,7 +446,8 @@ void EXTI1_IRQHandler(void)
     {
         LL_EXTI_ClearFlag_0_31(LL_EXTI_LINE_1);
 #ifdef RECEIVER
-        nrf24l01p_rx_receive(rx_data);
+        nrf24l01p_rx_receive(rx_tmp);
+        bytes_held = 12;
 #endif
 
 #ifdef TRANSMITTER
