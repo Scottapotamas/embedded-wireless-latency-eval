@@ -30,7 +30,6 @@ target_sources(
         ${PROJ_NAME}
         PRIVATE
         ${CMAKE_SOURCE_DIR}/src/main.c
-        ${CMAKE_SOURCE_DIR}/src/fifo.c
         ${CMAKE_SOURCE_DIR}/libs/nrf24.c
 )
 

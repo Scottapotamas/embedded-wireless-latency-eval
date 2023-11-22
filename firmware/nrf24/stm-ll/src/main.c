@@ -19,13 +19,13 @@
 #include "nrf24.h"
 
 //#define PAYLOAD_12B
-#define PAYLOAD_128B
-//#define PAYLOAD_1024B
+//#define PAYLOAD_128B
+#define PAYLOAD_1024B
 
 //#define TRANSMITTER
 #define RECEIVER
 
-#define NRF24_MAX_TX_BYTES 12
+#define NRF24_MAX_TX_BYTES 32
 
 /* -------------------------------------------------------------------------- */
 
@@ -272,7 +272,7 @@ int main(void)
 #ifdef RECEIVER
     // Configure RX PIPE
     nRF24_SetAddr(nRF24_PIPE1, nRF24_ADDR); // program address for pipe
-    nRF24_SetRXPipe(nRF24_PIPE1, nRF24_AA_ON, 12); // Auto-ACK: enabled, payload length: 12 bytes
+    nRF24_SetRXPipe(nRF24_PIPE1, nRF24_AA_ON, NRF24_MAX_TX_BYTES); // Auto-ACK: enabled, payload length: 12 bytes
 
     nRF24_SetOperationalMode(nRF24_MODE_RX);
 #endif
