@@ -24,11 +24,6 @@ add_definitions(-DUSE_FULL_LL_DRIVER)
 add_definitions(-DHSE_VALUE=8000000)
 add_definitions(-DLSE_VALUE=32768)
 
-
-add_definitions(-DPAYLOAD_12B)
-#add_definitions(-DPAYLOAD_128B)
-#add_definitions(-DPAYLOAD_1024B)
-
 add_executable(${PROJ_NAME})
 
 target_sources(
@@ -36,7 +31,7 @@ target_sources(
         PRIVATE
         ${CMAKE_SOURCE_DIR}/src/main.c
         ${CMAKE_SOURCE_DIR}/src/fifo.c
-        ${CMAKE_SOURCE_DIR}/libs/nrf24l01p.c
+        ${CMAKE_SOURCE_DIR}/libs/nrf24.c
 )
 
 target_include_directories(

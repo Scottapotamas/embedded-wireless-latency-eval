@@ -16,7 +16,16 @@
 #include "stm32f4xx_ll_exti.h"
 #include "stm32f4xx_ll_spi.h"
 
-#include "nrf24l01p.h"
+#include "nrf24.h"
+
+//#define PAYLOAD_12B
+#define PAYLOAD_128B
+//#define PAYLOAD_1024B
+
+//#define TRANSMITTER
+#define RECEIVER
+
+#define NRF24_MAX_TX_BYTES 12
 
 /* -------------------------------------------------------------------------- */
 
@@ -37,9 +46,12 @@ void setup_spi( void );
 static void crc16(uint8_t data, uint16_t *crc);
 
 volatile bool trigger_pending = false;
+volatile bool radio_irq = false;
 
 #define CRC_SEED (0xFFFFu)
-uint16_t bytes_read = 0;
+uint32_t bytes_to_send = 0;
+uint32_t bytes_sent = 0;
+uint32_t bytes_read = 0;
 uint16_t working_crc = CRC_SEED;
 uint16_t payload_crc = 0x00;
 
@@ -183,10 +195,10 @@ uint16_t payload_crc = 0x00;
 
 /* -------------------------------------------------------------------------- */
 
-//#define TRANSMITTER
-#define RECEIVER
+nRF24_RXResult pipe;    // Pipe number
 
-volatile uint8_t rx_tmp[32] = {0};
+volatile uint8_t tx_tmp[NRF24_MAX_TX_BYTES] = {0};
+volatile uint8_t rx_tmp[NRF24_MAX_TX_BYTES] = {0};
 volatile uint8_t bytes_held = 0;
 
 /* -------------------------------------------------------------------------- */
@@ -213,21 +225,147 @@ int main(void)
     payload_crc = working_crc;
     working_crc = CRC_SEED;
 
-#ifdef RECEIVER
-    nrf24l01p_rx_init(2500, _1Mbps);
-#endif
+    // Radio setup
+    nRF24_CE_L();
+
+    if( !nRF24_Check() )
+    {
+        while (1)
+        {
+            LL_GPIO_TogglePin( GPIOB, LL_GPIO_PIN_0 );
+            LL_mDelay(100);
+        }
+    }
+
+    nRF24_Init();
+
+    // Small delay to make init distinguishable from config in debug captures
+    LL_mDelay(5);
+
+    // Transmitter/receiver implementation which uses Enhanced ShockBurst
+    //   - TX/RX addresses: 'ESB'
+    //   - RF channel: 40 (2440MHz)
+    //   - data rate: 2Mbps
+    //   - CRC scheme: 2 byte
+    //   -  Auto-ACK (ShockBurst enabled)
+    static const uint8_t nRF24_ADDR[] = { 'E', 'S', 'B' };
+    nRF24_SetRFChannel(40);
+    nRF24_SetDataRate(nRF24_DR_2Mbps);
+    nRF24_SetCRCScheme(nRF24_CRC_2byte);
+    nRF24_SetAddrWidth(3);
 
 #ifdef TRANSMITTER
-    nrf24l01p_tx_init(2500, _1Mbps);
+    // Configure TX PIPE
+    nRF24_SetAddr(nRF24_PIPETX, nRF24_ADDR); // program TX address
+    nRF24_SetAddr(nRF24_PIPE0, nRF24_ADDR); // program address for pipe#0, must be same as TX (for Auto-ACK)
+
+    // Configure auto retransmit
+    nRF24_SetAutoRetr(nRF24_ARD_1000us, 5);
+
+    // Enable Auto-ACK for pipe#0 (for ACK packets)
+    nRF24_EnableAA(nRF24_PIPE0);
+    nRF24_SetOperationalMode(nRF24_MODE_TX);
+//    nRF24_SetDynamicPayloadLength(nRF24_DPL_ON);
 #endif
 
-    LL_mDelay(5);
+    // TODO: work out tx/rx pipe coexistence
+#ifdef RECEIVER
+    // Configure RX PIPE
+    nRF24_SetAddr(nRF24_PIPE1, nRF24_ADDR); // program address for pipe
+    nRF24_SetRXPipe(nRF24_PIPE1, nRF24_AA_ON, 12); // Auto-ACK: enabled, payload length: 12 bytes
+
+    nRF24_SetOperationalMode(nRF24_MODE_RX);
+#endif
+
+    // Set TX power (maximum)
+    nRF24_SetTXPower(nRF24_TXPWR_0dBm);
+    nRF24_ClearIRQFlags();
+
+    // Wake the transceiver
+    nRF24_SetPowerMode(nRF24_PWR_UP);
+
+    // Enable the transceiver for RX mode to start with
+    nRF24_CE_H();
 
     while(1)
     {
+
+        if( radio_irq )
+        {
+            radio_irq = false;
+            uint8_t status = nRF24_GetIRQFlags();
+
+            // RX fifo has data
+            if( status & nRF24_FLAG_RX_DR )
+            {
+                if (nRF24_GetStatus_RXFIFO() != nRF24_STATUS_RXFIFO_EMPTY)
+                {
+                    // Get a payload from the transceiver
+                    pipe = nRF24_ReadPayload(rx_tmp, &bytes_held);
+//                    pipe = nRF24_ReadPayloadDpl(rx_tmp, &bytes_held);
+
+                    nRF24_FlushRX();
+                }
+            }
+            else if( status & nRF24_FLAG_TX_DS ) // Data sent
+            {
+                bytes_sent += bytes_to_send;    // Previous burst was OK, increment position
+
+                // Send the next part of the test payload if needed
+                if(bytes_sent < sizeof(test_payload) )
+                {
+                    nRF24_CE_L();
+
+                    bytes_to_send = sizeof(test_payload) - bytes_sent;
+                    if( bytes_to_send > NRF24_MAX_TX_BYTES )
+                    {
+                        bytes_to_send = NRF24_MAX_TX_BYTES;
+                    }
+                    else
+                    {
+                        // dirty hack to ensure the tx buffer is zero padded
+                        memset(tx_tmp, 0, sizeof(tx_tmp));
+                    }
+
+                    // Copy a full
+                    memcpy(tx_tmp, (uint8_t *)&test_payload[bytes_sent], bytes_to_send);
+                    nRF24_WritePayload(tx_tmp, sizeof(tx_tmp));
+                }
+                else
+                {
+                    // Reset for next fresh packet
+                    bytes_sent = 0;
+                    memset(tx_tmp, 0, sizeof(tx_tmp));
+                }
+
+                nRF24_CE_H();
+            }
+            else if( status & nRF24_FLAG_MAX_RT ) // retries exceeded limit
+            {
+                nRF24_CE_L();
+                nRF24_FlushTX();
+
+                bytes_to_send = 0;
+                bytes_sent = 0;
+                memset(tx_tmp, 0, sizeof(tx_tmp));
+
+                // Leave the module in active mode for RX?
+                nRF24_CE_H();
+
+            }
+            else
+            {
+                nRF24_FlushTX();
+            }
+
+            // Clear pending IRQ flags
+            nRF24_ClearIRQFlags();
+        }
+
+        // Check inbound data for valid test payload sequences
         if( bytes_held )
         {
-            for( uint8_t i = 0; i < NRF24L01P_PAYLOAD_LENGTH; i++ )
+            for( uint8_t i = 0; i < bytes_held; i++ )
             {
                 // Reset the "parser"
                 if(rx_tmp[i] == 0x00 )
@@ -253,10 +391,24 @@ int main(void)
             LL_GPIO_ResetOutputPin( GPIOB, LL_GPIO_PIN_0 );
         }
 
+        // Send a packet when triggered
         if(trigger_pending)
         {
-            // Send a packet
-            nrf24l01p_tx_transmit(test_payload);
+            nRF24_CE_L();
+
+            // Copy the first slice into the transmit buffer
+            bytes_to_send = sizeof(test_payload);
+            if( bytes_to_send > NRF24_MAX_TX_BYTES )
+            {
+                bytes_to_send = NRF24_MAX_TX_BYTES;
+            }
+
+            memcpy(tx_tmp, (uint8_t *)&test_payload[bytes_sent], bytes_to_send);
+            nRF24_WritePayload(tx_tmp, sizeof(tx_tmp));
+
+            nRF24_CE_H();
+            // The IRQ handling code should handle nRF24_FLAG_TX_DS, nRF24_FLAG_MAX_RT flags
+            // and is responsible for sending the rest on each success
 
 //            LL_GPIO_SetOutputPin( GPIOB, LL_GPIO_PIN_0 );
             trigger_pending = false;
@@ -342,27 +494,24 @@ void setup_nrf24_io( void )
 
     // PB3 - IRQ pin
     LL_GPIO_SetPinMode( GPIOB, LL_GPIO_PIN_3, LL_GPIO_MODE_INPUT );
-    LL_GPIO_SetPinSpeed( GPIOB, LL_GPIO_PIN_3, LL_GPIO_SPEED_FREQ_MEDIUM );
-    LL_GPIO_SetPinOutputType( GPIOB, LL_GPIO_PIN_3, LL_GPIO_MODE_INPUT );
+    LL_GPIO_SetPinSpeed( GPIOB, LL_GPIO_PIN_3, LL_GPIO_SPEED_FREQ_HIGH );
     LL_GPIO_SetPinPull( GPIOB, LL_GPIO_PIN_3, LL_GPIO_PULL_NO );
     LL_GPIO_ResetOutputPin( GPIOB, LL_GPIO_PIN_3 );
 
     // EXTI1 setup
-    LL_EXTI_EnableIT_0_31(LL_EXTI_LINE_1);
-    LL_EXTI_EnableFallingTrig_0_31(LL_EXTI_LINE_1);
+    LL_EXTI_EnableIT_0_31(LL_EXTI_LINE_3);
+    LL_EXTI_EnableFallingTrig_0_31(LL_EXTI_LINE_3);
 
-    LL_SYSCFG_SetEXTISource(LL_SYSCFG_EXTI_PORTB, LL_SYSCFG_EXTI_LINE1);
-    LL_EXTI_ClearFlag_0_31(LL_EXTI_LINE_1);
+    LL_SYSCFG_SetEXTISource(LL_SYSCFG_EXTI_PORTB, LL_SYSCFG_EXTI_LINE3);
+    LL_EXTI_ClearFlag_0_31(LL_EXTI_LINE_3);
 
     // IRQ config
-    NVIC_SetPriority(EXTI1_IRQn, NVIC_EncodePriority(
+    NVIC_SetPriority(EXTI3_IRQn, NVIC_EncodePriority(
             NVIC_GetPriorityGrouping(),
             0,
-            1
+            0
     ));
-    NVIC_EnableIRQ(EXTI1_IRQn);
-
-    LL_EXTI_ClearFlag_0_31(LL_EXTI_LINE_1);
+    NVIC_EnableIRQ(EXTI3_IRQn);
 
 }
 
@@ -413,7 +562,7 @@ void setup_spi( void )
     LL_SPI_SetClockPolarity( SPI1, LL_SPI_POLARITY_LOW );
     LL_SPI_SetClockPhase( SPI1, LL_SPI_PHASE_1EDGE );
     LL_SPI_SetNSSMode( SPI1, LL_SPI_NSS_SOFT );
-    LL_SPI_SetBaudRatePrescaler(SPI1, LL_SPI_BAUDRATEPRESCALER_DIV64 );
+    LL_SPI_SetBaudRatePrescaler(SPI1, LL_SPI_BAUDRATEPRESCALER_DIV8 );
     LL_SPI_SetTransferBitOrder( SPI1, LL_SPI_MSB_FIRST );
     LL_SPI_DisableCRC( SPI1 );
     LL_SPI_SetCRCPolynomial( SPI1, 10 );
@@ -440,19 +589,12 @@ void EXTI0_IRQHandler(void)
 }
 
 // SPI IRQ handling
-void EXTI1_IRQHandler(void)
+void EXTI3_IRQHandler(void)
 {
-    if(LL_EXTI_IsActiveFlag_0_31(LL_EXTI_LINE_1))
+    if(LL_EXTI_IsActiveFlag_0_31(LL_EXTI_LINE_3))
     {
-        LL_EXTI_ClearFlag_0_31(LL_EXTI_LINE_1);
-#ifdef RECEIVER
-        nrf24l01p_rx_receive(rx_tmp);
-        bytes_held = 12;
-#endif
-
-#ifdef TRANSMITTER
-        nrf24l01p_tx_irq();
-#endif
+        LL_EXTI_ClearFlag_0_31(LL_EXTI_LINE_3);
+        radio_irq = true;
     }
 }
 

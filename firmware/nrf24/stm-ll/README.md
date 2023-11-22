@@ -26,5 +26,9 @@ With CLion's build settings, I set the build generator to "Let CMake Decide".
 
 # Acknowledgements
 
-I started trying to build from [Ilia Motornyi's `nrf24l01-lib`](https://github.com/elmot/nrf24l01-lib) (Unlicense licensed) but had a suite of issues.
-[Eunhye Seok's `stm32_hal_nrf24l01p`](https://github.com/mokhwasomssi/stm32_hal_nrf24l01p) was modified to use STM LL.
+I read and tried both of these C libraries + rough examples:
+
+- [Eunhye Seok's `stm32_hal_nrf24l01p`](https://github.com/mokhwasomssi/stm32_hal_nrf24l01p)
+- [Ilia Motornyi's `nrf24l01-lib`](https://github.com/elmot/nrf24l01-lib) (Unlicense licensed)
+
+But had varying issues with both as published, this implementation is mostly `nrf24l01-lib` but I needed to fix some issues and implement IRQ on RX/TX.
