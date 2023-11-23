@@ -7,13 +7,14 @@ IO Setup:
 - PA0 is driven with a 3.3V trigger pulse from my sig-gen.
 - PB0 is a 3.3V output signal (also connected to the nucleo's onboard green LED)
 - The RFM95 modules requires some IO and uses SPI1:
-  - PB4 for Chip enable
+  - PB4 for Reset
+  - PB3 for G0 IRQ
+  - PB8 for G1 IRQ
+  - PB9 for G5 IRQ
   - PA4 for Chip select
-  - PB3 for IRQ
   - PA5 for SPI CLK
   - PA6 for SPI MISO
   - PA7 for SPI MOSI
-  - TODO: any additional GPIO pins
 
 ## Deps
 
@@ -27,3 +28,5 @@ With CLion's build settings, I set the build generator to "Let CMake Decide".
 
 # Acknowledgements
 
+[Henri Heimann's `stm32-hal-rfm95`](https://github.com/henriheimann/stm32-hal-rfm95) (MIT Licence) library was used as starting point, with modifications made for LL rather than ST HAL.
+That library includes the GPL licenced ideetron encryption library.

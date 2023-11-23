@@ -1,5 +1,6 @@
 /* -------------------------------------------------------------------------- */
 
+#include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -15,6 +16,8 @@
 #include "stm32f4xx_ll_gpio.h"
 #include "stm32f4xx_ll_exti.h"
 #include "stm32f4xx_ll_spi.h"
+
+#include "rfm95.h"
 
 /* -------------------------------------------------------------------------- */
 
@@ -33,6 +36,7 @@ void portAssertHandler( const char *file,
 
 /* -------------------------------------------------------------------------- */
 
+void setup_dwt( void );
 void setup_gpio_output( void );
 void setup_gpio_input( void );
 void setup_rfm95_io( void );
@@ -192,6 +196,75 @@ uint16_t payload_crc = 0x00;
 
 uint8_t rx_tmp[32] = { 0 };
 
+static uint32_t get_precision_tick();
+static void precision_sleep_until(uint32_t target_ticks);
+static uint8_t random_int(uint8_t max);
+static uint8_t get_battery_level();
+
+rfm95_handle_t rfm95_handle = {
+        .spi_handle = SPI1,
+        .nss_port = GPIOA,
+        .nss_pin = LL_GPIO_PIN_4,
+        .nrst_port = GPIOB,
+        .nrst_pin = LL_GPIO_PIN_4,
+        .device_address = {
+                0x00, 0x00, 0x00, 0x00
+        },
+        .application_session_key = {
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+        },
+        .network_session_key = {
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+        },
+        .receive_mode = RFM95_RECEIVE_MODE_NONE,    // RFM95_RECEIVE_MODE_RX12
+        .precision_tick_frequency = 168000000,
+        .precision_tick_drift_ns_per_s = 5000,
+        .get_precision_tick = get_precision_tick,
+        .precision_sleep_until = precision_sleep_until,
+        .random_int = random_int,
+        .get_battery_level = get_battery_level,
+};
+
+/* -------------------------------------------------------------------------- */
+
+static uint32_t get_precision_tick( void )
+{
+    // TODO: consider using a different high-precision timer
+    //  it's fine for this test firmware though
+//    return DWT->CYCCNT;
+
+    return SysTick->VAL;
+}
+
+static void precision_sleep_until(uint32_t target_ticks)
+{
+    while (true)
+    {
+        uint32_t start_ticks = get_precision_tick();
+        if (start_ticks > target_ticks)
+        {
+            break;
+        }
+
+        uint32_t ticks_to_sleep = target_ticks - start_ticks;
+        // TODO: sleep until we're needed
+
+        // Busy wait until we have reached the target.
+        while (get_precision_tick() < target_ticks);
+    }
+}
+
+static uint8_t random_int(uint8_t max)
+{
+    // Low quality random number is ok for this test
+    return rand();
+}
+
+static uint8_t get_battery_level()
+{
+    return 0xff; // 0xff = Unknown battery level.
+}
+
 /* -------------------------------------------------------------------------- */
 
 int main(void)
@@ -199,6 +272,7 @@ int main(void)
     hal_core_init();
     hal_core_clock_configure();
 
+    setup_dwt();
     setup_gpio_output();
     setup_gpio_input();
 
@@ -217,10 +291,33 @@ int main(void)
     working_crc = CRC_SEED;
 
     // Radio setup
-    // TODO: Configure radio module
+    if( !rfm95_init(&rfm95_handle) )
+    {
+        while(1)
+        {
+            // Blink to show error state
+            LL_GPIO_TogglePin( GPIOB, LL_GPIO_PIN_0 );
+            LL_mDelay(100);
+        }
+    }
 
     while(1)
     {
+
+        uint8_t data_packet[] = {
+                0x01, 0x02, 0x03, 0x4
+        };
+
+        // Send a packet
+        if (!rfm95_send_receive_cycle(&rfm95_handle, data_packet, sizeof(data_packet)))
+        {
+            // Error
+            LL_GPIO_SetOutputPin( GPIOB, LL_GPIO_PIN_0 );
+            LL_mDelay(300);
+            LL_GPIO_ResetOutputPin( GPIOB, LL_GPIO_PIN_0 );
+        }
+
+        LL_mDelay(200);
 
         // TODO: read inbound bytes into a buffer for processing
         uint32_t bytes_held = 0;
@@ -285,6 +382,16 @@ static void crc16(uint8_t data, uint16_t *crc)
 
 /* -------------------------------------------------------------------------- */
 
+void setup_dwt( void )
+{
+    //Enable the DWT timer
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    DWT->CYCCNT = 0;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+}
+
+/* -------------------------------------------------------------------------- */
+
 void setup_gpio_output( void )
 {
     LL_PWR_DisableWakeUpPin( LL_PWR_WAKEUP_PIN1 );
@@ -332,7 +439,7 @@ void setup_gpio_input( void )
 
 void setup_rfm95_io( void )
 {
-    // PB4 - Chip enable
+    // PB4 - Reset
     LL_AHB1_GRP1_EnableClock( LL_AHB1_GRP1_PERIPH_GPIOB );
 
     LL_GPIO_SetPinMode( GPIOB, LL_GPIO_PIN_4, LL_GPIO_MODE_OUTPUT );
@@ -343,16 +450,38 @@ void setup_rfm95_io( void )
 
     // PB3 - IRQ pin
     LL_GPIO_SetPinMode( GPIOB, LL_GPIO_PIN_3, LL_GPIO_MODE_INPUT );
-    LL_GPIO_SetPinSpeed( GPIOB, LL_GPIO_PIN_3, LL_GPIO_SPEED_FREQ_HIGH );
+    LL_GPIO_SetPinSpeed( GPIOB, LL_GPIO_PIN_3, LL_GPIO_SPEED_FREQ_MEDIUM );
     LL_GPIO_SetPinPull( GPIOB, LL_GPIO_PIN_3, LL_GPIO_PULL_NO );
     LL_GPIO_ResetOutputPin( GPIOB, LL_GPIO_PIN_3 );
 
-    // EXTI1 setup
     LL_EXTI_EnableIT_0_31(LL_EXTI_LINE_3);
-    LL_EXTI_EnableFallingTrig_0_31(LL_EXTI_LINE_3);
+    LL_EXTI_EnableRisingTrig_0_31(LL_EXTI_LINE_3);
+    LL_EXTI_ClearFlag_0_31(LL_EXTI_LINE_3);
+
+    // PB8 - IRQ
+    LL_GPIO_SetPinMode( GPIOB, LL_GPIO_PIN_8, LL_GPIO_MODE_INPUT );
+    LL_GPIO_SetPinSpeed( GPIOB, LL_GPIO_PIN_8, LL_GPIO_SPEED_FREQ_MEDIUM );
+    LL_GPIO_SetPinPull( GPIOB, LL_GPIO_PIN_8, LL_GPIO_PULL_NO );
+    LL_GPIO_ResetOutputPin( GPIOB, LL_GPIO_PIN_8 );
+
+    LL_EXTI_EnableIT_0_31(LL_EXTI_LINE_8);
+    LL_EXTI_EnableRisingTrig_0_31(LL_EXTI_LINE_8);
+    LL_EXTI_ClearFlag_0_31(LL_EXTI_LINE_8);
+
+    // PB9 - IRQ
+    LL_GPIO_SetPinMode( GPIOB, LL_GPIO_PIN_9, LL_GPIO_MODE_INPUT );
+    LL_GPIO_SetPinSpeed( GPIOB, LL_GPIO_PIN_9, LL_GPIO_SPEED_FREQ_MEDIUM );
+    LL_GPIO_SetPinPull( GPIOB, LL_GPIO_PIN_9, LL_GPIO_PULL_NO );
+    LL_GPIO_ResetOutputPin( GPIOB, LL_GPIO_PIN_9 );
+
+    LL_EXTI_EnableIT_0_31(LL_EXTI_LINE_9);
+    LL_EXTI_EnableRisingTrig_0_31(LL_EXTI_LINE_9);
+    LL_EXTI_ClearFlag_0_31(LL_EXTI_LINE_9);
+
 
     LL_SYSCFG_SetEXTISource(LL_SYSCFG_EXTI_PORTB, LL_SYSCFG_EXTI_LINE3);
-    LL_EXTI_ClearFlag_0_31(LL_EXTI_LINE_3);
+    LL_SYSCFG_SetEXTISource(LL_SYSCFG_EXTI_PORTB, LL_SYSCFG_EXTI_LINE8);
+    LL_SYSCFG_SetEXTISource(LL_SYSCFG_EXTI_PORTB, LL_SYSCFG_EXTI_LINE9);
 
     // IRQ config
     NVIC_SetPriority(EXTI3_IRQn, NVIC_EncodePriority(
@@ -360,8 +489,14 @@ void setup_rfm95_io( void )
             0,
             0
     ));
-    NVIC_EnableIRQ(EXTI3_IRQn);
+    NVIC_SetPriority(EXTI9_5_IRQn, NVIC_EncodePriority(
+            NVIC_GetPriorityGrouping(),
+            0,
+            0
+    ));
 
+    NVIC_EnableIRQ(EXTI3_IRQn);
+    NVIC_EnableIRQ(EXTI9_5_IRQn);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -443,7 +578,22 @@ void EXTI3_IRQHandler(void)
     if(LL_EXTI_IsActiveFlag_0_31(LL_EXTI_LINE_3))
     {
         LL_EXTI_ClearFlag_0_31(LL_EXTI_LINE_3);
-        // TODO: handle IRQ?
+        rfm95_on_interrupt(&rfm95_handle, RFM95_INTERRUPT_DIO0);
+    }
+}
+
+void EXTI9_5_IRQHandler(void)
+{
+    if (LL_EXTI_IsActiveFlag_0_31(LL_EXTI_LINE_8))
+    {
+        LL_EXTI_ClearFlag_0_31(LL_EXTI_LINE_8);
+        rfm95_on_interrupt(&rfm95_handle, RFM95_INTERRUPT_DIO1);
+    }
+
+    if (LL_EXTI_IsActiveFlag_0_31(LL_EXTI_LINE_9))
+    {
+        LL_EXTI_ClearFlag_0_31(LL_EXTI_LINE_9);
+        rfm95_on_interrupt(&rfm95_handle, RFM95_INTERRUPT_DIO5);
     }
 }
 

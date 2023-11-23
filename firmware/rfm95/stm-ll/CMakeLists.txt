@@ -30,7 +30,10 @@ target_sources(
         ${PROJ_NAME}
         PRIVATE
         ${CMAKE_SOURCE_DIR}/src/main.c
-#        ${CMAKE_SOURCE_DIR}/libs/something.c
+        ${CMAKE_SOURCE_DIR}/libs/rfm95.c
+        ${CMAKE_SOURCE_DIR}/libs/ideetron/Encrypt_V31.c
+        ${CMAKE_SOURCE_DIR}/libs/ideetron/AES-128_V10.c
+
 )
 
 target_include_directories(
@@ -39,6 +42,8 @@ target_include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/src
         ${CMAKE_CURRENT_SOURCE_DIR}/libs/
+        ${CMAKE_CURRENT_SOURCE_DIR}/libs/ideetron
+
 )
 
 target_link_libraries(
