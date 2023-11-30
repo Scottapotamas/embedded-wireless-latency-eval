@@ -1,213 +1,132 @@
-#pragma once
+#ifndef RFM95_H
+#define RFM95_H
 
+#include <stdint.h>
 #include <stdbool.h>
 
-#include "stm32f4xx_ll_gpio.h"
-#include "stm32f4xx_ll_exti.h"
-#include "stm32f4xx_ll_spi.h"
+#include "rfm95_defines.h"
 
-#if defined (TESTING)
-#include "testing/mock_hal.h"
+// User callbacks for SPI register read/write functions
+typedef uint32_t (*pwl_rfm9X_reg_rwr_fptr_t)(uint8_t reg_addr, uint8_t *reg_data, uint32_t len);
+
+// Prototype definition for the required delay function
+typedef void (*pwl_rfm9X_ms_delay_t)(uint32_t ms_count);
+
+typedef void (*pwl_rfm9X_enable_irq_t)(void);
+
+// The radio can handle packet sizes up to 255 bytes long
+// If you don't intend to send packets that long you can
+// adjust/define this to a smaller value that will save
+// some memory space.
+#if !defined(PWL_RFM9X_RX_BUFFER_LEN)
+#define PWL_RFM9X_RX_BUFFER_LEN 256
 #endif
 
-#ifndef RFM95_SPI_TIMEOUT
-#define RFM95_SPI_TIMEOUT 10
+// Generally this doesn't need to be adjusted, but just in
+// case someone has a radio with a different clock.
+#if !defined(PWL_RFM9X_BASE_CLOCK_FREQENCY)
+#define PWL_RFM9X_BASE_CLOCK_FREQENCY (32000000)
 #endif
 
-#ifndef RFM95_WAKEUP_TIMEOUT
-#define RFM95_WAKEUP_TIMEOUT 10
-#endif
-
-#ifndef RFM95_SEND_TIMEOUT
-#define RFM95_SEND_TIMEOUT 100
-#endif
-
-#ifndef RFM95_RECEIVE_TIMEOUT
-#define RFM95_RECEIVE_TIMEOUT 1000
-#endif
-
-#define RFM95_EEPROM_CONFIG_MAGIC 0xab67
-
-typedef struct {
-
-	uint32_t frequency;
-
-} rfm95_channel_config_t;
-
-typedef struct {
-
-	/**
-	 * MAGIC
-	 */
-	uint16_t magic;
-
-	/**
-	 * The current RX frame counter value.
-	 */
-	uint16_t rx_frame_count;
-
-	/**
-	 * The current TX frame counter value.
-	 */
-	uint16_t tx_frame_count;
-
-	/**
-	 * The delay to the RX1 window.
-	 */
-	uint8_t rx1_delay;
-
-	/**
-	 * The configuration of channels;
-	 */
-	rfm95_channel_config_t channels[16];
-
-	/**
-	 * Mask defining which channels are configured.
-	 */
-	uint16_t channel_mask;
-
-} rfm95_eeprom_config_t;
-
-typedef void (*rfm95_on_after_interrupts_configured)();
-
-typedef bool (*rfm95_load_eeprom_config)(rfm95_eeprom_config_t *config);
-typedef void (*rfm95_save_eeprom_config)(const rfm95_eeprom_config_t *config);
-
-typedef uint32_t (*rfm95_get_precision_tick)();
-typedef void (*rfm95_precision_sleep_until)(uint32_t ticks_target);
-
-typedef uint8_t (*rfm95_random_int)(uint8_t max);
-typedef uint8_t (*rfm95_get_battery_level)();
+// RX_ERROR is an RX that didn't meet the radio's requirements
+// If RX_ERROR is returned the radio has been placed back into
+// RX_CONTINUOUS mode in anticipation of another packet.
+#define PWL_RFM9X_POLL_RX_ERROR   (-1)
+#define PWL_RFM9X_POLL_NO_STATUS   (0)
+#define PWL_RFM9X_POLL_RX_READY    (1)
+#define PWL_RFM9X_POLL_TX_DONE     (2)
 
 typedef enum
 {
-	RFM95_INTERRUPT_DIO0,
-	RFM95_INTERRUPT_DIO1,
-	RFM95_INTERRUPT_DIO5
+    RFM95_INTERRUPT_DIO0,
+    RFM95_INTERRUPT_DIO1,
+    RFM95_INTERRUPT_DIO5,
+    RFM95_INTERRUPT_DIO_NUM
 } rfm95_interrupt_t;
 
-typedef enum
-{
-	RFM95_RECEIVE_MODE_NONE,
-	RFM95_RECEIVE_MODE_RX1_ONLY,
-	RFM95_RECEIVE_MODE_RX12,
-} rfm95_receive_mode_t;
 
-#define RFM95_INTERRUPT_COUNT 3
+// Setup the callbacks and library internals.
+rfm95_status_t rfm95_setup_library( pwl_rfm9X_reg_rwr_fptr_t read_cb,
+                                    pwl_rfm9X_reg_rwr_fptr_t write_cb,
+                                    pwl_rfm9X_enable_irq_t en_irq_cb,
+                                    pwl_rfm9X_ms_delay_t delay_cb );
 
-/**
- * Structure defining a handle describing an RFM95(W) transceiver.
- */
-typedef struct {
+// Call init with the following LoRa radio parameters.
+// Hz is the target carrier/center frequency.  (i.e. 915000000)
+// tx_power_dbm must be between 2 and 20.
+rfm95_status_t rfm95_init_radio(  uint32_t center_frequency_hz,
+                                  uint8_t tx_power_dbm,
+                                  lora_bw_t bandwidth_channel,
+                                  lora_cr_t coding_rate,
+                                  lora_sf_t spreading_factor );
 
-	/**
-	 * The handle to the SPI bus for the device.
-	 */
-    SPI_TypeDef *spi_handle;
+void rfm95_on_interrupt(rfm95_interrupt_t interrupt);
 
-	/**
-	 * The port of the NSS pin.
-	 */
-    GPIO_TypeDef *nss_port;
+void handle_pending_interrupts( void );
 
-	/**
-	 * The NSS pin.
-	 */
-	uint16_t nss_pin;
+rfm95_status_t set_irq( rfm95_interrupt_t dio, rfm95_irq_type irq_type );
 
-	/**
-	 * The port of the RST pin.
-	 */
-	GPIO_TypeDef *nrst_port;
+rfm95_status_t clear_irq( void );
 
-	/**
-	 * The RST pin.
-	 */
-	uint16_t nrst_pin;
+rfm95_status_t invert_tx_iq( void );
 
-	/**
-	 * The device address for the LoraWAN
-	 */
-	uint8_t device_address[4];
+rfm95_status_t invert_rx_iq( void );
 
-	/**
-	 * The network session key for ABP activation with the LoraWAN
-	 */
-	uint8_t network_session_key[16];
+rfm95_status_t set_preamble( void );
 
-	/**
-	 * The application session key for ABP activation with the LoraWAN
-	 */
-	uint8_t application_session_key[16];
+rfm95_status_t set_lna( void );
 
-	/**
-	 * The frequency of the precision tick in Hz.
-	 */
-	uint32_t precision_tick_frequency;
+// Set the chirp bandwidth, coding and spreading factor settings
+rfm95_status_t set_chirp_config( lora_bw_t bandwidth_channel,
+                                 lora_cr_t coding_rate,
+                                 lora_sf_t spreading_factor );
 
-	/**
-	 * The +/- timing drift per second in nanoseconds.
-	 */
-	uint32_t precision_tick_drift_ns_per_s;
+// Use set_center_frequency to adjust the carrier frequency after initialization if desired
+rfm95_status_t set_center_frequency( uint32_t Hz );
 
-	/**
-	 * The receive mode to operate at.
-	 */
-	rfm95_receive_mode_t receive_mode;
+// Use set_power_amp to adjust the TX power after initialization if desired
+// dBm must be between 5 and 20
+rfm95_status_t set_power_amp( uint8_t dBm );
 
-	/**
-	 * Function provided that returns a precise tick for timing critical operations.
-	 */
-	rfm95_get_precision_tick get_precision_tick;
+// Set modem max payload length
+rfm95_status_t set_max_payload_length( uint8_t bytes );
 
-	/**
-	 * Function that provides a precise sleep until a given tick count is reached.
-	 */
-	rfm95_precision_sleep_until precision_sleep_until;
+// Use set_mode to select one of the operating modes given by lora_mode_t
+rfm95_status_t set_mode( lora_mode_t mode );
 
-	/**
-	 * Function that provides a random integer.
-	 */
-	rfm95_random_int random_int;
+// Read back the current mode from the radio
+lora_mode_t get_mode( void );
 
-	/**
-	 * Function that returns the device's battery level.
-	 */
-	rfm95_get_battery_level get_battery_level;
+// Return the Receive Signal Strength Indicator (approximated by the radio)
+int16_t get_rssi( void );
 
-	/**
-	 * The load config function pointer can be used to load config values from non-volatile memory.
-	 * Can be set to NULL to skip.
-	 */
-	rfm95_load_eeprom_config reload_config;
+// Ask the radio what it's version number is
+uint8_t get_version( void );
 
-	/**
-	 * The save config function pointer can be used to store config values in non-volatile memory.
-	 * Can be set to NULL to skip.
-	 */
-	rfm95_save_eeprom_config save_config;
 
-	/**
-	 * Callback called after the interrupt functions have been properly configred;
-	 */
-	rfm95_on_after_interrupts_configured on_after_interrupts_configured;
 
-	/**
-	 * The config saved into the eeprom.
-	 */
-	rfm95_eeprom_config_t config;
 
-	/**
-	 * Tick values when each interrupt was called.
-	 */
-	volatile uint32_t interrupt_times[RFM95_INTERRUPT_COUNT];
 
-} rfm95_handle_t;
 
-bool rfm95_init(rfm95_handle_t *handle);
+// Instead of interrupt driven, this driver is polled.
+// poll() must be called regularly when waiting for RX data in RFM9X_LORA_MODE_RX_CONTINUOUS
+// mode.  It can also be called regularly during TX to determine when TX is complete.
+// Once RX data is identified by polling call get_rx_data to copy the data to
+// your local buffer.
+// Returns one of the defined "PWL_RFM9X_POLL_..." status values
+int poll( void );
 
-bool rfm95_set_power(rfm95_handle_t *handle, int8_t power);
+// rx_data_ready() returns true if there is RX data ready that hasn't been copied out of the buffer.
+bool rx_data_ready( void );
 
-bool rfm95_send_receive_cycle(rfm95_handle_t *handle, const uint8_t *send_data, uint32_t send_data_length);
+// receive() sets the mode to RX, if data has been received it copies the received data
+// to user's buffer and clears the rx_data_ready status.
+// This function can be "polled" in place of the poll function if waiting for RX data
+// Returns the number of bytes received or 0 if no data is available
+uint8_t receive(uint8_t *buf, uint8_t *len);
 
-void rfm95_on_interrupt(rfm95_handle_t *handle, rfm95_interrupt_t interrupt);
+// Transmit the given data
+rfm95_status_t send( uint8_t *data, uint8_t len );
+
+
+#endif //RFM95_H

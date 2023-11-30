@@ -28,5 +28,5 @@ With CLion's build settings, I set the build generator to "Let CMake Decide".
 
 # Acknowledgements
 
-[Henri Heimann's `stm32-hal-rfm95`](https://github.com/henriheimann/stm32-hal-rfm95) (MIT Licence) library was used as starting point, with modifications made for LL rather than ST HAL.
-That library includes the GPL licenced ideetron encryption library.
+[Henri Heimann's `stm32-hal-rfm95`](https://github.com/henriheimann/stm32-hal-rfm95) (MIT Licence) library was used as starting point but is more intended for LoRaWAN use,
+[PeeWeeLabs's `pwl_rfm9X`](https://github.com/PeeWeeLabs/pwl_rfm9X) (MIT Licence) was also referenced (it's in C++).

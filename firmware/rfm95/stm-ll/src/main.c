@@ -194,77 +194,80 @@ uint16_t payload_crc = 0x00;
 
 /* -------------------------------------------------------------------------- */
 
+static uint32_t spi_read_cb(uint8_t reg_addr, uint8_t *buffer, uint32_t length);
+static uint32_t spi_write_cb(uint8_t reg_addr, uint8_t *buffer, uint32_t length);
+static void enable_irq_cb( void );
+
 uint8_t rx_tmp[32] = { 0 };
-
-static uint32_t get_precision_tick();
-static void precision_sleep_until(uint32_t target_ticks);
-static uint8_t random_int(uint8_t max);
-static uint8_t get_battery_level();
-
-rfm95_handle_t rfm95_handle = {
-        .spi_handle = SPI1,
-        .nss_port = GPIOA,
-        .nss_pin = LL_GPIO_PIN_4,
-        .nrst_port = GPIOB,
-        .nrst_pin = LL_GPIO_PIN_4,
-        .device_address = {
-                0x00, 0x00, 0x00, 0x00
-        },
-        .application_session_key = {
-                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
-        },
-        .network_session_key = {
-                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
-        },
-        .receive_mode = RFM95_RECEIVE_MODE_NONE,    // RFM95_RECEIVE_MODE_RX12
-        .precision_tick_frequency = 168000000,
-        .precision_tick_drift_ns_per_s = 5000,
-        .get_precision_tick = get_precision_tick,
-        .precision_sleep_until = precision_sleep_until,
-        .random_int = random_int,
-        .get_battery_level = get_battery_level,
-};
 
 /* -------------------------------------------------------------------------- */
 
-static uint32_t get_precision_tick( void )
+static inline void spi_cs_low( void )
 {
-    // TODO: consider using a different high-precision timer
-    //  it's fine for this test firmware though
-//    return DWT->CYCCNT;
-
-    return SysTick->VAL;
+    LL_GPIO_ResetOutputPin( GPIOA, LL_GPIO_PIN_4 );
 }
 
-static void precision_sleep_until(uint32_t target_ticks)
+static inline void spi_cs_high( void )
 {
-    while (true)
+    LL_GPIO_SetOutputPin( GPIOA, LL_GPIO_PIN_4 );
+}
+
+static inline uint8_t spi_ll_rw(uint8_t data)
+{
+    LL_SPI_Enable(SPI1);
+    // Wait until TX buffer is empty
+    while (LL_SPI_IsActiveFlag_BSY(SPI1));
+    while (!LL_SPI_IsActiveFlag_TXE(SPI1));
+    LL_SPI_TransmitData8(SPI1, data);
+    while (!LL_SPI_IsActiveFlag_RXNE(SPI1));
+
+    return LL_SPI_ReceiveData8(SPI1);
+}
+
+static uint32_t spi_read_cb(uint8_t reg_addr, uint8_t *buffer, uint32_t length)
+{
+    spi_cs_low();
+    spi_ll_rw((uint8_t)reg_addr );
+
+    while( length-- )
     {
-        uint32_t start_ticks = get_precision_tick();
-        if (start_ticks > target_ticks)
-        {
-            break;
-        }
-
-        uint32_t ticks_to_sleep = target_ticks - start_ticks;
-        // TODO: sleep until we're needed
-
-        // Busy wait until we have reached the target.
-        while (get_precision_tick() < target_ticks);
+        *buffer++ = spi_ll_rw( 0x00 );
     }
+
+    spi_cs_high();
+    return 0;
 }
 
-static uint8_t random_int(uint8_t max)
+static uint32_t spi_write_cb(uint8_t reg_addr, uint8_t *buffer, uint32_t length)
 {
-    // Low quality random number is ok for this test
-    return rand();
+    spi_cs_low();
+    spi_ll_rw((uint8_t)reg_addr | 0x80u);
+    for (uint32_t i = 0; i < length; i++)
+    {
+        spi_ll_rw(buffer[i] );
+    }
+
+    spi_cs_high();
+    return 0;
 }
 
-static uint8_t get_battery_level()
+static void enable_irq_cb( void )
 {
-    return 0xff; // 0xff = Unknown battery level.
-}
+    // IRQ config
+    NVIC_SetPriority(EXTI3_IRQn, NVIC_EncodePriority(
+            NVIC_GetPriorityGrouping(),
+            0,
+            0
+    ));
+    NVIC_SetPriority(EXTI9_5_IRQn, NVIC_EncodePriority(
+            NVIC_GetPriorityGrouping(),
+            0,
+            0
+    ));
 
+    NVIC_EnableIRQ(EXTI3_IRQn);
+    NVIC_EnableIRQ(EXTI9_5_IRQn);
+}
 /* -------------------------------------------------------------------------- */
 
 int main(void)
@@ -291,7 +294,24 @@ int main(void)
     working_crc = CRC_SEED;
 
     // Radio setup
-    if( !rfm95_init(&rfm95_handle) )
+    rfm95_setup_library( &spi_read_cb, &spi_write_cb, &enable_irq_cb, &LL_mDelay );
+
+    // Strobe the reset pin
+    LL_GPIO_ResetOutputPin(GPIOB, LL_GPIO_PIN_4);
+    LL_mDelay( 1 );
+    LL_GPIO_SetOutputPin(GPIOB, LL_GPIO_PIN_4);
+
+    // Wait for module in case this is a fresh power-on
+    LL_mDelay( 10 );
+
+    rfm95_status_t status;
+    status = rfm95_init_radio(915000000,
+                              15,
+                              RFM9X_LORA_BW_62p5k,
+                              RFM9X_LORA_CR_4_5,
+                              RFM9X_LORA_SF_2048);
+
+    if( status == RFM95_STATUS_ERROR )
     {
         while(1)
         {
@@ -301,26 +321,18 @@ int main(void)
         }
     }
 
+
     while(1)
     {
+        handle_pending_interrupts();
 
-        uint8_t data_packet[] = {
-                0x01, 0x02, 0x03, 0x4
-        };
+        uint8_t bytes_held = 0;
+        uint8_t buffer_length = sizeof(rx_tmp);
+        bytes_held = receive( rx_tmp, &buffer_length );
 
-        // Send a packet
-        if (!rfm95_send_receive_cycle(&rfm95_handle, data_packet, sizeof(data_packet)))
-        {
-            // Error
-            LL_GPIO_SetOutputPin( GPIOB, LL_GPIO_PIN_0 );
-            LL_mDelay(300);
-            LL_GPIO_ResetOutputPin( GPIOB, LL_GPIO_PIN_0 );
-        }
-
-        LL_mDelay(200);
+        LL_mDelay(10);
 
         // TODO: read inbound bytes into a buffer for processing
-        uint32_t bytes_held = 0;
 
         // Check inbound data for valid test payload sequences
         if( bytes_held )
@@ -354,7 +366,20 @@ int main(void)
         // Send a packet when triggered
         if(trigger_pending)
         {
-            // Send a packet
+            // Send a packet if able
+            status = send(test_payload, sizeof(test_payload) );
+            if( status == RFM95_STATUS_ERROR )
+            {
+                // TODO: how to error handle here?
+                LL_GPIO_SetOutputPin( GPIOB, LL_GPIO_PIN_0 );
+                LL_mDelay(300);
+                LL_GPIO_ResetOutputPin( GPIOB, LL_GPIO_PIN_0 );
+            }
+
+            // TODO: set a flag that we've sent a packet, to be resolved by TX complete IRQ
+//            rval = radio_driver.wait_packet_tx();
+//            if (rval) Serial.println("TX Timeout");
+
 
 //            LL_GPIO_SetOutputPin( GPIOB, LL_GPIO_PIN_0 );
             trigger_pending = false;
@@ -483,20 +508,7 @@ void setup_rfm95_io( void )
     LL_SYSCFG_SetEXTISource(LL_SYSCFG_EXTI_PORTB, LL_SYSCFG_EXTI_LINE8);
     LL_SYSCFG_SetEXTISource(LL_SYSCFG_EXTI_PORTB, LL_SYSCFG_EXTI_LINE9);
 
-    // IRQ config
-    NVIC_SetPriority(EXTI3_IRQn, NVIC_EncodePriority(
-            NVIC_GetPriorityGrouping(),
-            0,
-            0
-    ));
-    NVIC_SetPriority(EXTI9_5_IRQn, NVIC_EncodePriority(
-            NVIC_GetPriorityGrouping(),
-            0,
-            0
-    ));
-
-    NVIC_EnableIRQ(EXTI3_IRQn);
-    NVIC_EnableIRQ(EXTI9_5_IRQn);
+    // NVIC IRQ are setup in callback from library setup as the module defuaults to 10Mhz clock on DIO5
 }
 
 /* -------------------------------------------------------------------------- */
@@ -535,7 +547,7 @@ void setup_spi( void )
     LL_GPIO_SetPinSpeed( GPIOA, LL_GPIO_PIN_4, LL_GPIO_SPEED_FREQ_HIGH );
     LL_GPIO_SetPinOutputType( GPIOA, LL_GPIO_PIN_4, LL_GPIO_OUTPUT_PUSHPULL );
     LL_GPIO_SetPinPull( GPIOA, LL_GPIO_PIN_4, LL_GPIO_PULL_NO );
-    LL_GPIO_ResetOutputPin( GPIOA, LL_GPIO_PIN_4 );
+    LL_GPIO_SetOutputPin( GPIOA, LL_GPIO_PIN_4 );
 
     // SPI Setup
     LL_APB2_GRP1_EnableClock(LL_APB2_GRP1_PERIPH_SPI1);
@@ -578,7 +590,7 @@ void EXTI3_IRQHandler(void)
     if(LL_EXTI_IsActiveFlag_0_31(LL_EXTI_LINE_3))
     {
         LL_EXTI_ClearFlag_0_31(LL_EXTI_LINE_3);
-        rfm95_on_interrupt(&rfm95_handle, RFM95_INTERRUPT_DIO0);
+        rfm95_on_interrupt( RFM95_INTERRUPT_DIO0 );
     }
 }
 
@@ -587,13 +599,13 @@ void EXTI9_5_IRQHandler(void)
     if (LL_EXTI_IsActiveFlag_0_31(LL_EXTI_LINE_8))
     {
         LL_EXTI_ClearFlag_0_31(LL_EXTI_LINE_8);
-        rfm95_on_interrupt(&rfm95_handle, RFM95_INTERRUPT_DIO1);
+        rfm95_on_interrupt(RFM95_INTERRUPT_DIO1 );
     }
 
     if (LL_EXTI_IsActiveFlag_0_31(LL_EXTI_LINE_9))
     {
         LL_EXTI_ClearFlag_0_31(LL_EXTI_LINE_9);
-        rfm95_on_interrupt(&rfm95_handle, RFM95_INTERRUPT_DIO5);
+        rfm95_on_interrupt( RFM95_INTERRUPT_DIO5 );
     }
 }
 
