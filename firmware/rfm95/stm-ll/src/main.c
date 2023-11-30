@@ -199,6 +199,7 @@ static uint32_t spi_write_cb(uint8_t reg_addr, uint8_t *buffer, uint32_t length)
 static void enable_irq_cb( void );
 
 uint8_t rx_tmp[32] = { 0 };
+uint8_t bytes_held = 0;
 
 /* -------------------------------------------------------------------------- */
 
@@ -268,6 +269,14 @@ static void enable_irq_cb( void )
     NVIC_EnableIRQ(EXTI3_IRQn);
     NVIC_EnableIRQ(EXTI9_5_IRQn);
 }
+
+static void rx_data_cb( uint8_t *data, uint8_t length )
+{
+    // copy here
+    memcpy(rx_tmp, data, sizeof(rx_tmp) );
+    bytes_held = length;
+}
+
 /* -------------------------------------------------------------------------- */
 
 int main(void)
@@ -294,7 +303,11 @@ int main(void)
     working_crc = CRC_SEED;
 
     // Radio setup
-    rfm95_setup_library( &spi_read_cb, &spi_write_cb, &enable_irq_cb, &LL_mDelay );
+    rfm95_setup_library( &spi_read_cb,
+                         &spi_write_cb,
+                         &enable_irq_cb,
+                         &rx_data_cb,
+                         &LL_mDelay );
 
     // Strobe the reset pin
     LL_GPIO_ResetOutputPin(GPIOB, LL_GPIO_PIN_4);
@@ -321,18 +334,16 @@ int main(void)
         }
     }
 
+    LL_mDelay(20);
+
+    // todo consider a better way to ask the library to make this change
+    //      or just remove indirection
+    // Start a continuous read
+    start_rx_with_irq();
 
     while(1)
     {
         handle_pending_interrupts();
-
-        uint8_t bytes_held = 0;
-        uint8_t buffer_length = sizeof(rx_tmp);
-        bytes_held = receive( rx_tmp, &buffer_length );
-
-        LL_mDelay(10);
-
-        // TODO: read inbound bytes into a buffer for processing
 
         // Check inbound data for valid test payload sequences
         if( bytes_held )
@@ -361,6 +372,7 @@ int main(void)
             memset(rx_tmp, 0, sizeof(rx_tmp));
 
             LL_GPIO_ResetOutputPin( GPIOB, LL_GPIO_PIN_0 );
+            start_rx_with_irq();
         }
 
         // Send a packet when triggered

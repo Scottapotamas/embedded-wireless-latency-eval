@@ -14,6 +14,8 @@ typedef void (*pwl_rfm9X_ms_delay_t)(uint32_t ms_count);
 
 typedef void (*pwl_rfm9X_enable_irq_t)(void);
 
+typedef void (*rfm9X_rx_data_cb_t)(uint8_t*, uint8_t);
+
 // The radio can handle packet sizes up to 255 bytes long
 // If you don't intend to send packets that long you can
 // adjust/define this to a smaller value that will save
@@ -49,6 +51,7 @@ typedef enum
 rfm95_status_t rfm95_setup_library( pwl_rfm9X_reg_rwr_fptr_t read_cb,
                                     pwl_rfm9X_reg_rwr_fptr_t write_cb,
                                     pwl_rfm9X_enable_irq_t en_irq_cb,
+                                    rfm9X_rx_data_cb_t rx_data_cb,
                                     pwl_rfm9X_ms_delay_t delay_cb );
 
 // Call init with the following LoRa radio parameters.
@@ -116,14 +119,9 @@ uint8_t get_version( void );
 // Returns one of the defined "PWL_RFM9X_POLL_..." status values
 int poll( void );
 
-// rx_data_ready() returns true if there is RX data ready that hasn't been copied out of the buffer.
-bool rx_data_ready( void );
-
-// receive() sets the mode to RX, if data has been received it copies the received data
-// to user's buffer and clears the rx_data_ready status.
-// This function can be "polled" in place of the poll function if waiting for RX data
-// Returns the number of bytes received or 0 if no data is available
-uint8_t receive(uint8_t *buf, uint8_t *len);
+// Sets the mode to RXContinuous and polls IRQ status once
+// Assumes IRQ handler is able to run the poll() when DI0 fires
+void start_rx_with_irq( void );
 
 // Transmit the given data
 rfm95_status_t send( uint8_t *data, uint8_t len );

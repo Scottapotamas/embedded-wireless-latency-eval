@@ -3,12 +3,18 @@
 
 #define RFM95_VERSION (0x12)
 
-enum {
-    PWL_RFM9X_INTERRUPT_STATUS_MASK  = 0b01101000,
-    PWL_RFM9X_RX_DONE_INTERRUPT_FLAG = 0b01000000,
-    PWL_RFM9X_RX_CRC_ERROR_FLAG      = 0b00100000,
-    PWL_RFM9X_TX_INTERRUPT_MASK      = 0b00001000
-};
+// Define masks for each interrupt flag bit
+#define RFM9X_IRQ_MASK_RX_TIMEOUT          0x80
+#define RFM9X_IRQ_MASK_RX_DONE             0x40
+#define RFM9X_IRQ_MASK_PAYLOAD_CRC_ERROR   0x20
+#define RFM9X_IRQ_MASK_VALID_HEADER        0x10
+#define RFM9X_IRQ_MASK_TX_DONE             0x08
+#define RFM9X_IRQ_MASK_CAD_DONE            0x04
+#define RFM9X_IRQ_MASK_FHSS_CHANGE_CHANNEL 0x02
+#define RFM9X_IRQ_MASK_CAD_DETECTED        0x01
+
+// Macros to check flags
+#define IS_FLAG_SET(irq_flags, mask)  ((irq_flags) & (mask))
 
 enum {
     RFM9X_LORA_BW_BitPos = 0x04,
