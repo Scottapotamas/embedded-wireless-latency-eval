@@ -21,9 +21,9 @@
 
 /* -------------------------------------------------------------------------- */
 
-#define PAYLOAD_12B
+//#define PAYLOAD_12B
 //#define PAYLOAD_128B
-// #define PAYLOAD_1024B
+ #define PAYLOAD_1024B
 
 /* -------------------------------------------------------------------------- */
 
@@ -198,7 +198,7 @@ static uint32_t spi_read_cb(uint8_t reg_addr, uint8_t *buffer, uint32_t length);
 static uint32_t spi_write_cb(uint8_t reg_addr, uint8_t *buffer, uint32_t length);
 static void enable_irq_cb( void );
 
-uint8_t rx_tmp[32] = { 0 };
+volatile uint8_t rx_tmp[512] = { 0 };
 uint8_t bytes_held = 0;
 
 /* -------------------------------------------------------------------------- */
@@ -319,10 +319,10 @@ int main(void)
 
     rfm95_status_t status;
     status = rfm95_init_radio(915000000,
-                              15,
-                              RFM9X_LORA_BW_62p5k,
+                              20,
+                              RFM9X_LORA_BW_250k,
                               RFM9X_LORA_CR_4_5,
-                              RFM9X_LORA_SF_2048);
+                              RFM9X_LORA_SF_128);
 
     if( status == RFM95_STATUS_ERROR )
     {
@@ -340,10 +340,35 @@ int main(void)
     //      or just remove indirection
     // Start a continuous read
     start_rx_with_irq();
+    rfm95_poll_status_t irq_status = RFM9X_POLL_RX_ERROR;
 
     while(1)
     {
-        handle_pending_interrupts();
+        irq_status = handle_pending_interrupts();
+
+        // TX complete IRQ
+        if( irq_status == RFM9X_POLL_TX_DONE )
+        {
+            bytes_sent += bytes_to_send;    // Previous burst was OK, increment position
+
+            // Send the next part of the test payload if needed
+            if(bytes_sent < sizeof(test_payload) )
+            {
+                bytes_to_send = sizeof(test_payload) - bytes_sent;
+                if( bytes_to_send > RFM9X_MAX_TX_LEN )
+                {
+                    bytes_to_send = RFM9X_MAX_TX_LEN;
+                }
+
+                // Send the data
+                send((uint8_t *)&test_payload[bytes_sent], bytes_to_send );
+            }
+            else
+            {
+                // Reset for next fresh packet
+                bytes_sent = 0;
+            }
+        }
 
         // Check inbound data for valid test payload sequences
         if( bytes_held )
@@ -378,20 +403,14 @@ int main(void)
         // Send a packet when triggered
         if(trigger_pending)
         {
-            // Send a packet if able
-            status = send(test_payload, sizeof(test_payload) );
-            if( status == RFM95_STATUS_ERROR )
+            // Copy the first slice into the transmit buffer
+            bytes_to_send = sizeof(test_payload);
+            if( bytes_to_send > RFM9X_MAX_TX_LEN )
             {
-                // TODO: how to error handle here?
-                LL_GPIO_SetOutputPin( GPIOB, LL_GPIO_PIN_0 );
-                LL_mDelay(300);
-                LL_GPIO_ResetOutputPin( GPIOB, LL_GPIO_PIN_0 );
+                bytes_to_send = RFM9X_MAX_TX_LEN;
             }
 
-            // TODO: set a flag that we've sent a packet, to be resolved by TX complete IRQ
-//            rval = radio_driver.wait_packet_tx();
-//            if (rval) Serial.println("TX Timeout");
-
+            send((uint8_t *)&test_payload[bytes_sent], bytes_to_send );
 
 //            LL_GPIO_SetOutputPin( GPIOB, LL_GPIO_PIN_0 );
             trigger_pending = false;

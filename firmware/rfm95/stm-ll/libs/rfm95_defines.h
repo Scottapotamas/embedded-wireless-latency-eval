@@ -29,9 +29,9 @@ typedef enum {
     RFM9X_LORA_SF_128 = 7,         // 0x07
     RFM9X_LORA_SF_256,             // 0x08
     RFM9X_LORA_SF_512,             // 0x09
-    RFM9X_LORA_SF_1024,            // 0x0A
+    RFM9X_LORA_SF_1024,            // 0x0A SF10
     RFM9X_LORA_SF_2048,            // 0x0B
-    RFM9X_LORA_SF_4096,            // 0x0C
+    RFM9X_LORA_SF_4096,            // 0x0C SF12
 } lora_sf_t;
 
 // Highest bit (0x80 offset) enables Long Range (LoRA) mode

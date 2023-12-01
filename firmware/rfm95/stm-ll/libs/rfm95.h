@@ -7,12 +7,12 @@
 #include "rfm95_defines.h"
 
 // User callbacks for SPI register read/write functions
-typedef uint32_t (*pwl_rfm9X_reg_rwr_fptr_t)(uint8_t reg_addr, uint8_t *reg_data, uint32_t len);
+typedef uint32_t (*rfm9X_reg_rwr_fptr_t)(uint8_t reg_addr, uint8_t *reg_data, uint32_t len);
 
 // Prototype definition for the required delay function
-typedef void (*pwl_rfm9X_ms_delay_t)(uint32_t ms_count);
+typedef void (*rfm9X_ms_delay_t)(uint32_t ms_count);
 
-typedef void (*pwl_rfm9X_enable_irq_t)(void);
+typedef void (*rfm9X_enable_irq_t)(void);
 
 typedef void (*rfm9X_rx_data_cb_t)(uint8_t*, uint8_t);
 
@@ -20,23 +20,27 @@ typedef void (*rfm9X_rx_data_cb_t)(uint8_t*, uint8_t);
 // If you don't intend to send packets that long you can
 // adjust/define this to a smaller value that will save
 // some memory space.
-#if !defined(PWL_RFM9X_RX_BUFFER_LEN)
-#define PWL_RFM9X_RX_BUFFER_LEN 256
+#if !defined(RFM9X_RX_BUFFER_LEN)
+#define RFM9X_RX_BUFFER_LEN 256
+#endif
+
+#if !defined(RFM9X_MAX_TX_LEN)
+#define RFM9X_MAX_TX_LEN 255
 #endif
 
 // Generally this doesn't need to be adjusted, but just in
 // case someone has a radio with a different clock.
-#if !defined(PWL_RFM9X_BASE_CLOCK_FREQENCY)
-#define PWL_RFM9X_BASE_CLOCK_FREQENCY (32000000)
+#if !defined(RFM9X_BASE_CLOCK_FREQENCY)
+#define RFM9X_BASE_CLOCK_FREQENCY (32000000)
 #endif
 
-// RX_ERROR is an RX that didn't meet the radio's requirements
-// If RX_ERROR is returned the radio has been placed back into
-// RX_CONTINUOUS mode in anticipation of another packet.
-#define PWL_RFM9X_POLL_RX_ERROR   (-1)
-#define PWL_RFM9X_POLL_NO_STATUS   (0)
-#define PWL_RFM9X_POLL_RX_READY    (1)
-#define PWL_RFM9X_POLL_TX_DONE     (2)
+typedef enum
+{
+    RFM9X_POLL_RX_ERROR = 0x00,
+    RFM9X_POLL_NO_STATUS,
+    RFM9X_POLL_RX_READY,
+    RFM9X_POLL_TX_DONE
+} rfm95_poll_status_t;
 
 typedef enum
 {
@@ -48,11 +52,11 @@ typedef enum
 
 
 // Setup the callbacks and library internals.
-rfm95_status_t rfm95_setup_library( pwl_rfm9X_reg_rwr_fptr_t read_cb,
-                                    pwl_rfm9X_reg_rwr_fptr_t write_cb,
-                                    pwl_rfm9X_enable_irq_t en_irq_cb,
+rfm95_status_t rfm95_setup_library( rfm9X_reg_rwr_fptr_t read_cb,
+                                    rfm9X_reg_rwr_fptr_t write_cb,
+                                    rfm9X_enable_irq_t en_irq_cb,
                                     rfm9X_rx_data_cb_t rx_data_cb,
-                                    pwl_rfm9X_ms_delay_t delay_cb );
+                                    rfm9X_ms_delay_t delay_cb );
 
 // Call init with the following LoRa radio parameters.
 // Hz is the target carrier/center frequency.  (i.e. 915000000)
@@ -65,7 +69,7 @@ rfm95_status_t rfm95_init_radio(  uint32_t center_frequency_hz,
 
 void rfm95_on_interrupt(rfm95_interrupt_t interrupt);
 
-void handle_pending_interrupts( void );
+rfm95_poll_status_t handle_pending_interrupts( void );
 
 rfm95_status_t set_irq( rfm95_interrupt_t dio, rfm95_irq_type irq_type );
 
@@ -116,12 +120,12 @@ uint8_t get_version( void );
 // mode.  It can also be called regularly during TX to determine when TX is complete.
 // Once RX data is identified by polling call get_rx_data to copy the data to
 // your local buffer.
-// Returns one of the defined "PWL_RFM9X_POLL_..." status values
-int poll( void );
+// Returns one of the defined "RFM9X_POLL_..." status values
+rfm95_poll_status_t poll( void );
 
 // Sets the mode to RXContinuous and polls IRQ status once
 // Assumes IRQ handler is able to run the poll() when DI0 fires
-void start_rx_with_irq( void );
+rfm95_poll_status_t start_rx_with_irq( void );
 
 // Transmit the given data
 rfm95_status_t send( uint8_t *data, uint8_t len );

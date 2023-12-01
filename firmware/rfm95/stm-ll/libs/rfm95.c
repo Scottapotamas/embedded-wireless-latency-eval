@@ -10,13 +10,13 @@ static void calculate_rssi( void );
 
 /* -------------------------------------------------------------------------- */
 
-pwl_rfm9X_reg_rwr_fptr_t _write_func;
-pwl_rfm9X_reg_rwr_fptr_t _read_func;
-pwl_rfm9X_enable_irq_t _enable_user_irq_func;
+rfm9X_reg_rwr_fptr_t _write_func;
+rfm9X_reg_rwr_fptr_t _read_func;
+rfm9X_enable_irq_t _enable_user_irq_func;
 rfm9X_rx_data_cb_t _rx_data_user_func;
-pwl_rfm9X_ms_delay_t _delay_func;
+rfm9X_ms_delay_t _delay_func;
 
-uint8_t  _buffer[PWL_RFM9X_RX_BUFFER_LEN];
+uint8_t  _buffer[RFM9X_RX_BUFFER_LEN];
 uint8_t  _rxlength;
 volatile lora_mode_t _mode;
 volatile int16_t  _rssi;
@@ -46,11 +46,11 @@ static int write_byte( uint8_t addr, uint8_t data )
 
 /* -------------------------------------------------------------------------- */
 
-rfm95_status_t rfm95_setup_library( pwl_rfm9X_reg_rwr_fptr_t read_cb,
-                                    pwl_rfm9X_reg_rwr_fptr_t write_cb,
-                                    pwl_rfm9X_enable_irq_t en_irq_cb,
+rfm95_status_t rfm95_setup_library( rfm9X_reg_rwr_fptr_t read_cb,
+                                    rfm9X_reg_rwr_fptr_t write_cb,
+                                    rfm9X_enable_irq_t en_irq_cb,
                                     rfm9X_rx_data_cb_t rx_data_cb,
-                                    pwl_rfm9X_ms_delay_t delay_cb )
+                                    rfm9X_ms_delay_t delay_cb )
 {
     // Setup callbacks
     if( read_cb )
@@ -141,13 +141,12 @@ rfm95_status_t rfm95_init_radio(  uint32_t center_frequency_hz,
     write_byte(RFM9X_REG_FifoRxBaseAddr, 0);
 
     // TODO: Consider allowing the upstream user to set this
-    set_max_payload_length(64);
+    set_max_payload_length(255);
 
     // Configure the radio
 
     // Set custom sync word
     write_byte(RFM9X_REG_SyncWord, 0x42);
-
 
     set_chirp_config( bandwidth_channel, coding_rate, spreading_factor );
     set_preamble();
@@ -172,25 +171,29 @@ void rfm95_on_interrupt(rfm95_interrupt_t interrupt)
 /* -------------------------------------------------------------------------- */
 
 // Allows user-space to spend time in response to IRQ
-void handle_pending_interrupts( void )
+rfm95_poll_status_t handle_pending_interrupts( void )
 {
     if( pending_irq[RFM95_INTERRUPT_DIO0] && _mode == RFM9X_LORA_MODE_TX )
     {
         pending_irq[RFM95_INTERRUPT_DIO0] = false;
-        set_mode(RFM9X_LORA_MODE_SLEEP);
+        return poll();
     }
 
     if( pending_irq[RFM95_INTERRUPT_DIO0] && _mode == RFM9X_LORA_MODE_RX_CONTINUOUS )
     {
         pending_irq[RFM95_INTERRUPT_DIO0] = false;
-        start_rx_with_irq();
+        return start_rx_with_irq();
     }
 
-    // TODO: consider doing something that doesn't talk as much?
+    /*
     if( pending_irq[RFM95_INTERRUPT_DIO0] || pending_irq[RFM95_INTERRUPT_DIO1] || pending_irq[RFM95_INTERRUPT_DIO5] )
     {
-//        poll();
+
     }
+    */
+
+    // TODO: consider how to handle unhandled IRQs?
+    return RFM9X_POLL_RX_ERROR;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -325,7 +328,7 @@ rfm95_status_t set_center_frequency(uint32_t Hz)
 {
     // Per manual, fRF = (fosc * Frf)  / 2^19
     // (2 ^ 19) = 524288
-    uint64_t frf = ((uint64_t)Hz << 19) / PWL_RFM9X_BASE_CLOCK_FREQENCY;
+    uint64_t frf = ((uint64_t)Hz << 19) / RFM9X_BASE_CLOCK_FREQENCY;
 
     write_byte(RFM9X_REG_FrfMsb, (frf >> 16) & 0xFF);
     write_byte(RFM9X_REG_FrfMid, (frf >>  8) & 0xFF);
@@ -449,18 +452,7 @@ uint8_t get_version( void )
 
 /* -------------------------------------------------------------------------- */
 
-
-
-
-
-
-
-
-
-
-
-
-int poll( )
+rfm95_poll_status_t poll( void )
 {
     uint8_t irq_flags = 0;
     irq_flags = read_byte(RFM9X_REG_IrqFlags);
@@ -472,14 +464,14 @@ int poll( )
     // TODO: reconsider this approach?
     if( !IS_FLAG_SET(irq_flags, RFM9X_IRQ_MASK_RX_DONE|RFM9X_IRQ_MASK_PAYLOAD_CRC_ERROR|RFM9X_IRQ_MASK_TX_DONE) )
     {
-        return PWL_RFM9X_POLL_NO_STATUS;
+        return RFM9X_POLL_NO_STATUS;
     }
 
     if( _mode == RFM9X_LORA_MODE_RX_CONTINUOUS )
     {
         if( IS_FLAG_SET(irq_flags, RFM9X_IRQ_MASK_RX_TIMEOUT) )
         {
-            return PWL_RFM9X_POLL_RX_ERROR;
+            return RFM9X_POLL_RX_ERROR;
         }
 
         // Sanity check the IRQ flag for RX done as we shouldn't get here without it
@@ -488,7 +480,7 @@ int poll( )
             // Return to standby and restart RX
             set_mode(RFM9X_LORA_MODE_STDBY);
             set_mode(RFM9X_LORA_MODE_RX_CONTINUOUS);
-            return PWL_RFM9X_POLL_RX_ERROR;
+            return RFM9X_POLL_RX_ERROR;
         }
 
         calculate_rssi();
@@ -496,12 +488,12 @@ int poll( )
         // If RX is done then check for a valid CRC
         bool crc_enabled = IS_FLAG_SET(read_byte(RFM9X_REG_HopChannel), 0x40);
 
-        if( !crc_enabled || !IS_FLAG_SET(irq_flags, RFM9X_IRQ_MASK_PAYLOAD_CRC_ERROR) )
+        if( !crc_enabled || IS_FLAG_SET(irq_flags, RFM9X_IRQ_MASK_PAYLOAD_CRC_ERROR) )
         {
             // Return to standby and restart RX
             set_mode(RFM9X_LORA_MODE_STDBY);
             set_mode(RFM9X_LORA_MODE_RX_CONTINUOUS);
-            return PWL_RFM9X_POLL_RX_ERROR;
+            return RFM9X_POLL_RX_ERROR;
         }
 
         // Read the size and payload
@@ -517,31 +509,34 @@ int poll( )
 
         rx_valid = true;
 
-        return PWL_RFM9X_POLL_RX_READY;
+        return RFM9X_POLL_RX_READY;
     }
     else if( _mode == RFM9X_LORA_MODE_TX )
     {
-        if ((irq_flags & 0b00001000) == 0b00001000)
+        if( IS_FLAG_SET(irq_flags, RFM9X_IRQ_MASK_TX_DONE) )
         {
-            set_mode(RFM9X_LORA_MODE_STDBY);
-            return PWL_RFM9X_POLL_TX_DONE;
+            set_mode(RFM9X_LORA_MODE_SLEEP);
+            return RFM9X_POLL_TX_DONE;
         }
     }
 
-    return PWL_RFM9X_POLL_NO_STATUS;
+    return RFM9X_POLL_NO_STATUS;
 }
 
-void start_rx_with_irq( void )
+rfm95_poll_status_t start_rx_with_irq( void )
 {
-    if( poll() == PWL_RFM9X_POLL_NO_STATUS )
+    uint8_t status = poll();
+    if( status == RFM9X_POLL_NO_STATUS )
     {
         if( (_mode != RFM9X_LORA_MODE_RX_CONTINUOUS) && (_mode != RFM9X_LORA_MODE_FSRX) )
         {
             set_irq(RFM95_INTERRUPT_DIO1, RFM95_IRQ_RXDONE );
             clear_irq();
-            set_mode(RFM9X_LORA_MODE_RX_CONTINUOUS);
+            set_mode( RFM9X_LORA_MODE_RX_CONTINUOUS );
         }
     }
+
+    return status;
 }
 
 rfm95_status_t send( uint8_t* data, uint8_t len )
@@ -574,4 +569,3 @@ rfm95_status_t send( uint8_t* data, uint8_t len )
 
     return RFM95_STATUS_OK;
 }
-
