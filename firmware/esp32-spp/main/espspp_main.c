@@ -7,22 +7,31 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "freertos/semphr.h"
-#include "freertos/timers.h"
 
 #include "nvs_flash.h"
-#include "esp_random.h"
-#include "esp_event.h"
 #include "esp_log.h"
+#include "esp_event.h"
+#include "esp_bt.h"
+#include "esp_bt_main.h"
+#include "esp_gap_bt_api.h"
+#include "esp_bt_device.h"
+#include "esp_spp_api.h"
 
 #include "driver/gpio.h"
 
 /* -------------------------------------------------------------------------- */
 
+#define INITATOR 1
+#define ACCEPTOR 2
+#define SPP_DEVICE_MODE INITATOR
+// #define SPP_DEVICE_MODE ACCEPTOR
+
+/* -------------------------------------------------------------------------- */
+
 // Packet size test length settings
-#define PAYLOAD_12B
+// #define PAYLOAD_12B
 // #define PAYLOAD_128B
-//#define PAYLOAD_1024B
+#define PAYLOAD_1024B
 
 /* -------------------------------------------------------------------------- */
 
@@ -40,14 +49,65 @@
 
 /* -------------------------------------------------------------------------- */
 
+#define SPP_SERVER_NAME "SPP_SERVER"
+#define EXAMPLE_DEVICE_NAME "ESP_SPP_ACCEPTOR"
 
+static const esp_spp_mode_t esp_spp_mode = ESP_SPP_MODE_CB;
+static const bool esp_spp_enable_l2cap_ertm = true;
+
+static const esp_spp_sec_t sec_mask = ESP_SPP_SEC_AUTHENTICATE;
 
 /* -------------------------------------------------------------------------- */
 
+// Specific to master
+esp_bd_addr_t peer_bd_addr = {0};
+static uint8_t peer_bdname_len;
+static char peer_bdname[ESP_BT_GAP_MAX_BDNAME_LEN + 1];
+static const char remote_device_name[] = EXAMPLE_DEVICE_NAME;
+
+#if SPP_DEVICE_MODE==INITATOR
+static const esp_bt_inq_mode_t inq_mode = ESP_BT_INQ_MODE_GENERAL_INQUIRY;
+static const uint8_t inq_len = 30;
+static const uint8_t inq_num_rsps = 0;
+#endif 
 
 /* -------------------------------------------------------------------------- */
 
 static const char *TAG = "espspp";
+
+#define MAX_SPP_PAYLOAD_BYTES (64)
+// #define MAX_SPP_PAYLOAD_BYTES (ESP_SPP_MAX_MTU)
+#define SPP_QUEUE_SIZE (8)
+static QueueHandle_t spp_evt_queue;
+
+typedef enum {
+    SPP_SEND_CB,
+    SPP_RECV_CB,
+} spp_event_id_t;
+
+typedef struct {
+    uint32_t bytes_sent;
+    bool congested;
+} spp_event_send_cb_t;
+
+typedef struct {
+    uint8_t *data;
+    uint32_t data_len;
+} spp_event_recv_cb_t;
+
+typedef union {
+    spp_event_send_cb_t send_cb;
+    spp_event_recv_cb_t recv_cb;
+} spp_event_data_t;
+
+// Main task queue needs to support send and receive events
+// The ID field helps distinguish between them
+typedef struct {
+    spp_event_id_t id;
+    spp_event_data_t data;
+} spp_event_t;
+
+uint32_t spp_handle = 0;
 
 /* -------------------------------------------------------------------------- */
 
@@ -55,6 +115,8 @@ volatile bool trigger_pending = false;
 
 #define CRC_SEED (0xFFFFu)
 uint16_t bytes_read = 0;
+uint16_t bytes_sent = 0;
+
 uint16_t working_crc = CRC_SEED;
 uint16_t payload_crc = 0x00;
 
@@ -204,6 +266,7 @@ static void IRAM_ATTR gpio_isr_handler(void* arg);
 
 static void crc16(uint8_t data, uint16_t *crc);
 
+static void benchmark_task(void *pvParameter);
 
 /* -------------------------------------------------------------------------- */
 
@@ -257,8 +320,421 @@ static void crc16(uint8_t data, uint16_t *crc)
 
 /* -------------------------------------------------------------------------- */
 
+static char *bda2str(uint8_t * bda, char *str, size_t size)
+{
+    if (bda == NULL || str == NULL || size < 18)
+    {
+        return NULL;
+    }
 
+    uint8_t *p = bda;
+    sprintf(str, "%02x:%02x:%02x:%02x:%02x:%02x",
+            p[0], p[1], p[2], p[3], p[4], p[5]);
+    return str;
+}
 
+static bool get_name_from_eir(uint8_t *eir, char *bdname, uint8_t *bdname_len)
+{
+    uint8_t *rmt_bdname = NULL;
+    uint8_t rmt_bdname_len = 0;
+
+    if( !eir)
+    {
+        return false;
+    }
+
+    rmt_bdname = esp_bt_gap_resolve_eir_data(eir, ESP_BT_EIR_TYPE_CMPL_LOCAL_NAME, &rmt_bdname_len);
+    
+    if( !rmt_bdname)
+    {
+        rmt_bdname = esp_bt_gap_resolve_eir_data(eir, ESP_BT_EIR_TYPE_SHORT_LOCAL_NAME, &rmt_bdname_len);
+    }
+
+    if( rmt_bdname)
+    {
+        if( rmt_bdname_len > ESP_BT_GAP_MAX_BDNAME_LEN) {
+            rmt_bdname_len = ESP_BT_GAP_MAX_BDNAME_LEN;
+        }
+
+        if( bdname)
+        {
+            memcpy(bdname, rmt_bdname, rmt_bdname_len);
+            bdname[rmt_bdname_len] = '\0';
+        }
+
+        if( bdname_len)
+        {
+            *bdname_len = rmt_bdname_len;
+        }
+
+        return true;
+    }
+
+    return false;
+}
+
+/* -------------------------------------------------------------------------- */
+
+static void spp_cb(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
+{
+    uint8_t i = 0;
+    char bda_str[18] = {0};
+
+    switch (event) 
+    {
+        case ESP_SPP_INIT_EVT:
+            if (param->init.status == ESP_SPP_SUCCESS) 
+            {
+                ESP_LOGI(TAG, "ESP_SPP_INIT_EVT");
+
+#if SPP_DEVICE_MODE==INITATOR
+                esp_bt_dev_set_device_name(EXAMPLE_DEVICE_NAME);
+                esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
+                esp_bt_gap_start_discovery(inq_mode, inq_len, inq_num_rsps);
+#else
+                esp_spp_start_srv(sec_mask, ESP_SPP_ROLE_SLAVE, 0, SPP_SERVER_NAME);
+#endif
+            }
+            else 
+            {
+                ESP_LOGE(TAG, "ESP_SPP_INIT_EVT status:%d", param->init.status);
+            }
+            break;
+
+        case ESP_SPP_DISCOVERY_COMP_EVT:
+            if( param->disc_comp.status == ESP_SPP_SUCCESS )
+            {
+                ESP_LOGI(TAG, "ESP_SPP_DISCOVERY_COMP_EVT scn_num:%d", param->disc_comp.scn_num);
+                
+                for( i = 0; i < param->disc_comp.scn_num; i++ )
+                {
+                    ESP_LOGI(   TAG,
+                                "-- [%d] scn:%d service_name:%s", 
+                                i, 
+                                param->disc_comp.scn[i],
+                                param->disc_comp.service_name[i]
+                            );
+                }
+
+                /* We only connect to the first found server on the remote SPP acceptor here */
+                esp_spp_connect(sec_mask, ESP_SPP_ROLE_MASTER, param->disc_comp.scn[0], peer_bd_addr);
+            }
+            else
+            {
+                ESP_LOGE(TAG, "ESP_SPP_DISCOVERY_COMP_EVT status=%d", param->disc_comp.status);
+            }
+            break;
+
+        case ESP_SPP_OPEN_EVT:
+            if( param->open.status == ESP_SPP_SUCCESS )
+            {
+                ESP_LOGI(TAG, "ESP_SPP_OPEN_EVT handle:%"PRIu32" rem_bda:[%s]", param->open.handle,
+                         bda2str(param->open.rem_bda, bda_str, sizeof(bda_str)));
+
+                // Cache the handle (a bit dirty, sorry), allowing user-space send calls to be made
+                spp_handle = param->open.handle;
+            }
+            else
+            {
+                ESP_LOGE(TAG, "ESP_SPP_OPEN_EVT status:%d", param->open.status);
+            }
+            break;
+
+        case ESP_SPP_CLOSE_EVT:
+            spp_handle = 0;
+            ESP_LOGI( TAG, 
+                      "ESP_SPP_CLOSE_EVT status:%d handle:%"PRIu32" close_by_remote:%d", 
+                      param->close.status,
+                      param->close.handle, 
+                      param->close.async 
+                    );
+            break;
+
+        case ESP_SPP_START_EVT:
+            if( param->start.status == ESP_SPP_SUCCESS )
+            {
+                ESP_LOGI( TAG, 
+                          "ESP_SPP_START_EVT handle:%"PRIu32" sec_id:%d scn:%d", 
+                          param->start.handle, 
+                          param->start.sec_id,
+                          param->start.scn
+                        );
+                esp_bt_dev_set_device_name(EXAMPLE_DEVICE_NAME);
+                esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
+            }
+            else
+            {
+                ESP_LOGE(TAG, "ESP_SPP_START_EVT status:%d", param->start.status);
+            }
+            break;
+
+        case ESP_SPP_CL_INIT_EVT:
+            if( param->cl_init.status == ESP_SPP_SUCCESS )
+            {
+                ESP_LOGI( TAG, 
+                          "ESP_SPP_CL_INIT_EVT handle:%"PRIu32" sec_id:%d", 
+                          param->cl_init.handle, 
+                          param->cl_init.sec_id
+                        );
+            } 
+            else 
+            {
+                ESP_LOGE(TAG, "ESP_SPP_CL_INIT_EVT status:%d", param->cl_init.status);
+            }
+            break;
+
+        case ESP_SPP_WRITE_EVT:
+        {
+            spp_handle = param->write.handle;
+
+            // Post an event to the user-space event queue describing the 'write completed' data
+            spp_event_t evt;
+            spp_event_send_cb_t *send_cb = &evt.data.send_cb;
+            evt.id = SPP_SEND_CB;
+
+            if( param->write.status == ESP_SPP_SUCCESS )
+            {
+                send_cb->bytes_sent = param->write.len;
+            }
+            else
+            {
+                ESP_LOGI(TAG, "TX  Fail, sent  %i", param->write.len);
+
+                // Previous packet failed to send
+                send_cb->bytes_sent = 0;
+            }
+
+            // Provide congestion status to the task
+            send_cb->congested = param->write.cong;
+
+            // Put the event into the queue for processing
+            if( xQueueSend(spp_evt_queue, &evt, 512) != pdTRUE )
+            {
+                ESP_LOGW(TAG, "TX Write event failed to enqueue");
+            }
+
+            break;
+        }
+
+        case ESP_SPP_CONG_EVT:
+            // Congestion resolution means the user-space task can continue sending if needed
+            if( param->cong.cong == 0 )
+            {
+                // Publish an event to the user-space queue with updated status
+                spp_event_t evt;
+                spp_event_send_cb_t *send_cb = &evt.data.send_cb;
+                evt.id = SPP_SEND_CB;
+
+                send_cb->congested = param->cong.cong;
+                send_cb->bytes_sent = 0;
+
+                // Put the event into the queue for processing
+                if( xQueueSend(spp_evt_queue, &evt, 512) != pdTRUE )
+                {
+                    ESP_LOGW(TAG, "Congestion update event failed to enqueue");
+                }
+            }
+            break;
+
+        case ESP_SPP_DATA_IND_EVT:
+        {
+            // Post an event to the user-space event queue with the inbound data
+            spp_event_t evt;
+            spp_event_recv_cb_t *recv_cb = &evt.data.recv_cb;
+            evt.id = SPP_RECV_CB;
+
+            // Allocate a sufficiently large chunk of memory and copy the payload into it
+            recv_cb->data = malloc( param->data_ind.len );
+            if( recv_cb->data == NULL )
+            {
+                ESP_LOGE(TAG, "RX Malloc fail");
+                return;
+            }
+            memcpy(recv_cb->data, param->data_ind.data, param->data_ind.len);
+            recv_cb->data_len = param->data_ind.len;
+
+            // Put the event into the queue for processing
+            if( xQueueSend(spp_evt_queue, &evt, 512) != pdTRUE )
+            {
+                ESP_LOGW(TAG, "RX event failed to enqueue");
+                free(recv_cb->data);
+            }
+            break;
+        }
+
+        case ESP_SPP_SRV_OPEN_EVT:
+            ESP_LOGI( TAG, 
+                      "ESP_SPP_SRV_OPEN_EVT status:%d handle:%"PRIu32", rem_bda:[%s]", 
+                      param->srv_open.status,
+                      param->srv_open.handle,
+                      bda2str(param->srv_open.rem_bda, 
+                      bda_str, 
+                      sizeof(bda_str))
+                    );
+            break;
+
+        case ESP_SPP_SRV_STOP_EVT:
+            ESP_LOGI(TAG, "ESP_SPP_SRV_STOP_EVT");
+            break;
+
+        case ESP_SPP_UNINIT_EVT:
+            ESP_LOGI(TAG, "ESP_SPP_UNINIT_EVT");
+            break;
+
+        default:
+            break;
+    }
+}
+
+/* -------------------------------------------------------------------------- */
+
+static void bt_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param)
+{
+    switch(event)
+    {
+        case ESP_BT_GAP_DISC_RES_EVT:
+            ESP_LOGI(TAG, "ESP_BT_GAP_DISC_RES_EVT:");
+            esp_log_buffer_hex(TAG, param->disc_res.bda, ESP_BD_ADDR_LEN);
+
+            // Search the EIR data for the target peer device name
+            for( int i = 0; i < param->disc_res.num_prop; i++ )
+            {
+                if( param->disc_res.prop[i].type == ESP_BT_GAP_DEV_PROP_EIR
+                    && get_name_from_eir(param->disc_res.prop[i].val, peer_bdname, &peer_bdname_len)
+                  )
+                {
+                    esp_log_buffer_char(TAG, peer_bdname, peer_bdname_len);
+
+                    // Have we found the target peer device?
+                    if(    strlen(remote_device_name) == peer_bdname_len
+                        && strncmp(peer_bdname, remote_device_name, peer_bdname_len) == 0 ) 
+                    {
+                        memcpy(peer_bd_addr, param->disc_res.bda, ESP_BD_ADDR_LEN);
+
+                        esp_bt_gap_cancel_discovery();
+                        esp_spp_start_discovery(peer_bd_addr);
+                    }
+                }
+            }
+            break;
+
+        case ESP_BT_GAP_DISC_STATE_CHANGED_EVT:
+            ESP_LOGI(TAG, "ESP_BT_GAP_DISC_STATE_CHANGED_EVT");
+            break;
+
+        case ESP_BT_GAP_RMT_SRVCS_EVT:
+            ESP_LOGI(TAG, "ESP_BT_GAP_RMT_SRVCS_EVT");
+            break;
+
+        case ESP_BT_GAP_RMT_SRVC_REC_EVT:
+            ESP_LOGI(TAG, "ESP_BT_GAP_RMT_SRVC_REC_EVT");
+            break;
+
+        case ESP_BT_GAP_AUTH_CMPL_EVT:
+            if( param->auth_cmpl.stat == ESP_BT_STATUS_SUCCESS )
+            {
+                ESP_LOGI(TAG, "authentication success: %s", param->auth_cmpl.device_name);
+                esp_log_buffer_hex(TAG, param->auth_cmpl.bda, ESP_BD_ADDR_LEN);
+            }
+            else
+            {
+                ESP_LOGE(TAG, "authentication failed, status:%d", param->auth_cmpl.stat);
+            }
+            break;
+        
+        case ESP_BT_GAP_PIN_REQ_EVT:
+            if( param->pin_req.min_16_digit )
+            {
+                ESP_LOGI(TAG, "Input pin code: 0000 0000 0000 0000");
+                esp_bt_pin_code_t pin_code = {0};
+                esp_bt_gap_pin_reply(param->pin_req.bda, true, 16, pin_code);
+            }
+            else
+            {
+                ESP_LOGI(TAG, "Input pin code: 1234");
+                esp_bt_pin_code_t pin_code;
+                pin_code[0] = '1';
+                pin_code[1] = '2';
+                pin_code[2] = '3';
+                pin_code[3] = '4';
+                esp_bt_gap_pin_reply(param->pin_req.bda, true, 4, pin_code);
+            }
+            break;
+        
+            case ESP_BT_GAP_MODE_CHG_EVT:
+            ESP_LOGI(TAG, "ESP_BT_GAP_MODE_CHG_EVT mode:%d", param->mode_chg.mode);
+            break;
+
+        default:
+            break;
+    }
+}
+
+/* -------------------------------------------------------------------------- */
+
+static void setup_bt( void )
+{
+    esp_err_t ret = 0;
+
+    ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_BLE));
+
+    esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
+    if( (ret = esp_bt_controller_init(&bt_cfg)) != ESP_OK)
+    {
+        ESP_LOGE(TAG, "%s init bt failed: %s", __func__, esp_err_to_name(ret));
+        return;
+    }
+
+    if( (ret = esp_bt_controller_enable(ESP_BT_MODE_CLASSIC_BT)) != ESP_OK)
+    {
+        ESP_LOGE(TAG, "%s enable bt failed: %s", __func__, esp_err_to_name(ret));
+        return;
+    }
+
+    if( (ret = esp_bluedroid_init()) != ESP_OK)
+    {
+        ESP_LOGE(TAG, "%s init bluedroid failed: %s", __func__, esp_err_to_name(ret));
+        return;
+    }
+
+    if( (ret = esp_bluedroid_enable()) != ESP_OK)
+    {
+        ESP_LOGE(TAG, "%s enable bluedroid failed: %s", __func__, esp_err_to_name(ret));
+        return;
+    }
+
+    if( (ret = esp_bt_gap_register_callback(bt_gap_cb)) != ESP_OK)
+    {
+        ESP_LOGE(TAG, "%s gap register failed: %s", __func__, esp_err_to_name(ret));
+        return;
+    }
+
+    if( (ret = esp_spp_register_callback(spp_cb)) != ESP_OK)
+    {
+        ESP_LOGE(TAG, "%s spp register failed: %s", __func__, esp_err_to_name(ret));
+        return;
+    }
+
+    esp_spp_cfg_t bt_spp_cfg = {
+        .mode = esp_spp_mode,
+        .enable_l2cap_ertm = esp_spp_enable_l2cap_ertm,
+        .tx_buffer_size = 0, // Only used for ESP_SPP_MODE_VFS mode
+    };
+
+    if( (ret = esp_spp_enhanced_init(&bt_spp_cfg)) != ESP_OK)
+    {
+        ESP_LOGE(TAG, "%s spp init failed: %s", __func__, esp_err_to_name(ret));
+        return;
+    }
+
+    /*
+     * Set default parameters for Legacy Pairing
+     * Use variable pin, input pin code when pairing
+     */
+    esp_bt_pin_type_t pin_type = ESP_BT_PIN_TYPE_VARIABLE;
+    esp_bt_pin_code_t pin_code;
+    esp_bt_gap_set_pin(pin_type, 0, pin_code);
+}
 
 /* -------------------------------------------------------------------------- */
 
@@ -287,8 +763,147 @@ void app_main(void)
     payload_crc = working_crc;
     working_crc = CRC_SEED;
 
-    // Start tasks
+    // Useful callback events need a queue for user-space handling 
+    spp_evt_queue = xQueueCreate(SPP_QUEUE_SIZE, sizeof(spp_event_t));
+    if (spp_evt_queue == NULL) {
+        ESP_LOGE(TAG, "Failed to create user-space evt queue");
+        return;
+    }
 
+    // Bluetooth Setup
+    setup_bt();
+
+    char bda_str[18] = {0};
+    ESP_LOGI(   TAG, 
+                "This board is: %s", 
+                bda2str((uint8_t *)esp_bt_dev_get_address(), 
+                bda_str, 
+                sizeof(bda_str))
+            );
+
+    // Start benchmark logic task
+    xTaskCreate(benchmark_task, "benchmark_task", 2048, NULL, 4, NULL);
+}
+
+static void benchmark_task(void *pvParameter)
+{
+    spp_event_t evt;
+    uint16_t bytes_sent = 0;
+
+    while(1)
+    {
+        if( trigger_pending )
+        {
+            if( spp_handle )
+            {
+                // Chunk large payloads into 250 byte packets
+                bytes_sent = 0;
+
+                uint16_t bytes_to_send = sizeof(test_payload) - bytes_sent;
+                if( bytes_to_send > MAX_SPP_PAYLOAD_BYTES )
+                {
+                    bytes_to_send = MAX_SPP_PAYLOAD_BYTES;
+                }
+                
+                esp_spp_write(spp_handle, bytes_to_send, &test_payload[bytes_sent] );
+
+                // Once the packet is sent, ESP_SPP_WRITE_EVT fires with how many bytes were sent.
+                // Subsequent chunks are sent from the event queue logic below 
+            }
+
+            trigger_pending = false;
+        }
+
+        // Handle inbound data from callbacks
+        if( xQueueReceive(spp_evt_queue, &evt, 1) )
+        {
+            switch( evt.id )
+            {
+                // Previously sent a packet
+                case SPP_SEND_CB:
+                {
+                    spp_event_send_cb_t *send_cb = &evt.data.send_cb;
+
+                    // ESP_LOGI(TAG, "At %i, Wrote %"PRIu32"B, CON: %i", bytes_sent, send_cb->bytes_sent, send_cb->congested);
+
+                    // Update index of sent data (for multi-packet transfers)
+                    bytes_sent += send_cb->bytes_sent;
+
+                    // If the link isn't congested, send more data as needed
+                    if( !send_cb->congested )
+                    {
+                        // Send the next chunk if needed
+                        if( bytes_sent < sizeof(test_payload) )
+                        {
+                            uint16_t bytes_to_send = sizeof(test_payload) - bytes_sent;
+                            if( bytes_to_send > MAX_SPP_PAYLOAD_BYTES )
+                            {
+                                bytes_to_send = MAX_SPP_PAYLOAD_BYTES;
+                            }
+
+                            esp_spp_write(spp_handle, bytes_to_send, &test_payload[bytes_sent]);
+                        }
+                        else
+                        {
+                            bytes_sent = 0;
+                            // ESP_LOGI(TAG, "FIN \n");
+                        }
+                    }
+                    else
+                    {
+                        // ESP_LOGI(TAG, "...");
+                    }
+  
+                    break;
+                } // end tx callback handling
+
+                case SPP_RECV_CB:
+                {
+                    // Destructure the callback into something more ergonomic
+                    spp_event_recv_cb_t *recv_cb = &evt.data.recv_cb;
+
+                    // ESP_LOGI(TAG, "Got %"PRIu32"B", recv_cb->data_len);
+
+                    for( uint16_t i = 0; i < recv_cb->data_len; i++ )
+                    {
+                        // Reset the "parser" if the start of a new test structure is seen
+                        if(recv_cb->data[i] == 0x00 )
+                        {
+                            bytes_read = 0;
+                            working_crc = CRC_SEED;
+                            // ESP_LOGI(TAG, "RESET\n");
+
+                        }
+
+                        // Running crc and byte count
+                        crc16( recv_cb->data[i], &working_crc );
+                        bytes_read++;
+
+                        // Identify the end of the packet via expected length and correct CRC
+                        if( bytes_read == sizeof(test_payload) && working_crc == payload_crc )
+                        {
+                            // Valid test structure
+                            gpio_set_level( GPIO_OUTPUT_IO_0, 1 );
+                            // ESP_LOGI(TAG, "GOOD \n");
+                        }
+                    }
+
+                    gpio_set_level( GPIO_OUTPUT_IO_0, 0 );
+                    
+                    // The rx callback uses malloc to store the inbound data
+                    // so clean up after we're done handling that data
+                    free( recv_cb->data );
+
+                    break;
+                }   // end rx callback handling
+
+                default:
+                    ESP_LOGE(TAG, "Invalid callback type: %d", evt.id);
+                    break;
+            }
+        }   // end evtxQueueReceive
+
+    }   // end event loop
 }
 
 /* -------------------------------------------------------------------------- */
