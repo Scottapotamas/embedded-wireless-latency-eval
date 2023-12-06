@@ -1,9 +1,5 @@
 #include "string.h"
 
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "freertos/event_groups.h"
-
 #include "esp_system.h"
 #include "esp_log.h"
 
@@ -14,9 +10,15 @@
 #include "esp_bt_main.h"
 
 #include "server.h"
+#include "ble_main_defs.h"
 
+/* -------------------------------------------------------------------------- */
 
-#define GATTS_TABLE_TAG  "GATTS_SPP_DEMO"
+static QueueHandle_t *user_evt_queue;
+
+/* -------------------------------------------------------------------------- */
+
+#define GATTS_TAG  "GATTS_SPP_DEMO"
 
 #define SPP_PROFILE_NUM             1
 #define SPP_PROFILE_APP_IDX         0
@@ -44,8 +46,6 @@ static const uint8_t spp_adv_data[23] = {
 static uint16_t spp_mtu_size = 23;
 static uint16_t spp_conn_id = 0xffff;
 static esp_gatt_if_t spp_gatts_if = 0xff;
-QueueHandle_t spp_uart_queue = NULL;
-static QueueHandle_t cmd_cmd_queue = NULL;
 
 static bool enable_data_ntf = false;
 static bool is_connected = false;
@@ -53,7 +53,8 @@ static esp_bd_addr_t spp_remote_bda = {0x0,};
 
 static uint16_t spp_handle_table[SPP_IDX_NB];
 
-static esp_ble_adv_params_t spp_adv_params = {
+static esp_ble_adv_params_t spp_adv_params = 
+{
     .adv_int_min        = 0x20,
     .adv_int_max        = 0x40,
     .adv_type           = ADV_TYPE_IND,
@@ -62,7 +63,8 @@ static esp_ble_adv_params_t spp_adv_params = {
     .adv_filter_policy  = ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY,
 };
 
-struct gatts_profile_inst {
+struct gatts_profile_inst 
+{
     esp_gatts_cb_t gatts_cb;
     uint16_t gatts_if;
     uint16_t app_id;
@@ -77,31 +79,37 @@ struct gatts_profile_inst {
     esp_bt_uuid_t descr_uuid;
 };
 
-typedef struct spp_receive_data_node{
+typedef struct spp_receive_data_node
+{
     int32_t len;
     uint8_t * node_buff;
     struct spp_receive_data_node * next_node;
-}spp_receive_data_node_t;
+} spp_receive_data_node_t;
 
 static spp_receive_data_node_t * temp_spp_recv_data_node_p1 = NULL;
 static spp_receive_data_node_t * temp_spp_recv_data_node_p2 = NULL;
 
-typedef struct spp_receive_data_buff{
+typedef struct spp_receive_data_buff
+{
     int32_t node_num;
     int32_t buff_size;
     spp_receive_data_node_t * first_node;
-}spp_receive_data_buff_t;
+} spp_receive_data_buff_t;
 
-static spp_receive_data_buff_t SppRecvDataBuff = {
+static spp_receive_data_buff_t SppRecvDataBuff = 
+{
     .node_num   = 0,
     .buff_size  = 0,
     .first_node = NULL
 };
 
+/* -------------------------------------------------------------------------- */
+
 static void gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if, esp_ble_gatts_cb_param_t *param);
 
 /* One gatt-based profile one app_id and one gatts_if, this array will store the gatts_if returned by ESP_GATTS_REG_EVT */
-static struct gatts_profile_inst spp_profile_tab[SPP_PROFILE_NUM] = {
+static struct gatts_profile_inst spp_profile_tab[SPP_PROFILE_NUM] = 
+{
     [SPP_PROFILE_APP_IDX] = {
         .gatts_cb = gatts_profile_event_handler,
         .gatts_if = ESP_GATT_IF_NONE,       /* Not get the gatt_if, so initial is ESP_GATT_IF_NONE */
@@ -199,13 +207,15 @@ static const esp_gatts_attr_db_t spp_gatt_db[SPP_IDX_NB] =
 
 };
 
+/* -------------------------------------------------------------------------- */
+
 static uint8_t find_char_and_desr_index(uint16_t handle)
 {
     uint8_t error = 0xff;
 
-    for(int i = 0; i < SPP_IDX_NB ; i++)
+    for( int i = 0; i < SPP_IDX_NB ; i++ )
     {
-        if(handle == spp_handle_table[i])
+        if( handle == spp_handle_table[i] )
         {
             return i;
         }
@@ -214,26 +224,32 @@ static uint8_t find_char_and_desr_index(uint16_t handle)
     return error;
 }
 
+/* -------------------------------------------------------------------------- */
+
 static bool store_wr_buffer(esp_ble_gatts_cb_param_t *p_data)
 {
     temp_spp_recv_data_node_p1 = (spp_receive_data_node_t *)malloc(sizeof(spp_receive_data_node_t));
 
     if(temp_spp_recv_data_node_p1 == NULL)
     {
-        ESP_LOGI(GATTS_TABLE_TAG, "malloc error %s %d", __func__, __LINE__);
+        ESP_LOGI(GATTS_TAG, "malloc error %s %d", __func__, __LINE__);
         return false;
     }
+    
     if(temp_spp_recv_data_node_p2 != NULL)
     {
         temp_spp_recv_data_node_p2->next_node = temp_spp_recv_data_node_p1;
     }
+    
     temp_spp_recv_data_node_p1->len = p_data->write.len;
     SppRecvDataBuff.buff_size += p_data->write.len;
     temp_spp_recv_data_node_p1->next_node = NULL;
     temp_spp_recv_data_node_p1->node_buff = (uint8_t *)malloc(p_data->write.len);
     temp_spp_recv_data_node_p2 = temp_spp_recv_data_node_p1;
-    if (temp_spp_recv_data_node_p1->node_buff == NULL) {
-        ESP_LOGI(GATTS_TABLE_TAG, "malloc error %s %d\n", __func__, __LINE__);
+    
+    if (temp_spp_recv_data_node_p1->node_buff == NULL) 
+    {
+        ESP_LOGI(GATTS_TAG, "malloc error %s %d\n", __func__, __LINE__);
         temp_spp_recv_data_node_p1->len = 0;
     }
     else
@@ -254,139 +270,49 @@ static bool store_wr_buffer(esp_ble_gatts_cb_param_t *p_data)
     return true;
 }
 
-
-void uart_task(void *pvParameters)
-{
-    uart_event_t event;
-    uint8_t total_num = 0;
-    uint8_t current_num = 0;
-
-    for (;;) {
-        //Waiting for UART event.
-        if (xQueueReceive(spp_uart_queue, (void * )&event, (TickType_t)portMAX_DELAY)) {
-            switch (event.type) {
-            //Event of UART receving data
-            case UART_DATA:
-                if ((event.size)&&(is_connected)) {
-                    uint8_t * temp = NULL;
-                    uint8_t * ntf_value_p = NULL;
-
-                    if(!enable_data_ntf)
-                    {
-                        ESP_LOGE(GATTS_TABLE_TAG, "%s do not enable data Notify", __func__);
-                        break;
-                    }
-
-                    temp = (uint8_t *)malloc(sizeof(uint8_t)*event.size);
-                    if(temp == NULL)
-                    {
-                        ESP_LOGE(GATTS_TABLE_TAG, "%s malloc.1 failed", __func__);
-                        break;
-                    }
-
-                    memset(temp,0x0,event.size);
-                    uart_read_bytes(UART_NUM_0,temp,event.size,portMAX_DELAY);
-
-                    if(event.size <= (spp_mtu_size - 3))
-                    {
-                        esp_ble_gatts_send_indicate(spp_gatts_if, spp_conn_id, spp_handle_table[SPP_IDX_SPP_DATA_NTY_VAL],event.size, temp, false);
-                    }
-                    else if(event.size > (spp_mtu_size - 3))
-                    {
-                        if((event.size%(spp_mtu_size - 7)) == 0)
-                        {
-                            total_num = event.size/(spp_mtu_size - 7);
-                        }
-                        else
-                        {
-                            total_num = event.size/(spp_mtu_size - 7) + 1;
-                        }
-
-                        current_num = 1;
-                        ntf_value_p = (uint8_t *)malloc((spp_mtu_size-3)*sizeof(uint8_t));
-
-                        if(ntf_value_p == NULL)
-                        {
-                            ESP_LOGE(GATTS_TABLE_TAG, "%s malloc.2 failed", __func__);
-                            free(temp);
-                            break;
-                        }
-
-                        while(current_num <= total_num)
-                        {
-                            if(current_num < total_num)
-                            {
-                                ntf_value_p[0] = '#';
-                                ntf_value_p[1] = '#';
-                                ntf_value_p[2] = total_num;
-                                ntf_value_p[3] = current_num;
-                                memcpy(ntf_value_p + 4,temp + (current_num - 1)*(spp_mtu_size-7),(spp_mtu_size-7));
-                                esp_ble_gatts_send_indicate(spp_gatts_if, spp_conn_id, spp_handle_table[SPP_IDX_SPP_DATA_NTY_VAL],(spp_mtu_size-3), ntf_value_p, false);
-                            }
-                            else if(current_num == total_num)
-                            {
-                                ntf_value_p[0] = '#';
-                                ntf_value_p[1] = '#';
-                                ntf_value_p[2] = total_num;
-                                ntf_value_p[3] = current_num;
-                                memcpy(ntf_value_p + 4,temp + (current_num - 1)*(spp_mtu_size-7),(event.size - (current_num - 1)*(spp_mtu_size - 7)));
-                                esp_ble_gatts_send_indicate(spp_gatts_if, spp_conn_id, spp_handle_table[SPP_IDX_SPP_DATA_NTY_VAL],(event.size - (current_num - 1)*(spp_mtu_size - 7) + 4), ntf_value_p, false);
-                            }
-                            vTaskDelay(20 / portTICK_PERIOD_MS);
-                            current_num++;
-                        }
-
-                        free(ntf_value_p);
-                    }
-                    free(temp);
-                }
-                break;
-            default:
-                break;
-            }
-        }
-    }
-    vTaskDelete(NULL);
-}
+/* -------------------------------------------------------------------------- */
 
 static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param)
 {
     esp_err_t err;
-    ESP_LOGE(GATTS_TABLE_TAG, "GAP_EVT, event %d", event);
+    ESP_LOGE(GATTS_TAG, "GAP_EVT, event %d", event);
 
     switch (event) 
     {
-    case ESP_GAP_BLE_ADV_DATA_RAW_SET_COMPLETE_EVT:
-        esp_ble_gap_start_advertising(&spp_adv_params);
-        break;
-    case ESP_GAP_BLE_ADV_START_COMPLETE_EVT:
-        //advertising start complete event to indicate advertising start successfully or failed
-        if((err = param->adv_start_cmpl.status) != ESP_BT_STATUS_SUCCESS) 
-        {
-            ESP_LOGE(GATTS_TABLE_TAG, "Advertising start failed: %s", esp_err_to_name(err));
-        }
-        break;
-    default:
-        break;
+        case ESP_GAP_BLE_ADV_DATA_RAW_SET_COMPLETE_EVT:
+            esp_ble_gap_start_advertising(&spp_adv_params);
+            break;
+
+        case ESP_GAP_BLE_ADV_START_COMPLETE_EVT:
+            //advertising start complete event to indicate advertising start successfully or failed
+            if((err = param->adv_start_cmpl.status) != ESP_BT_STATUS_SUCCESS) 
+            {
+                ESP_LOGE(GATTS_TAG, "Advertising start failed: %s", esp_err_to_name(err));
+            }
+            break;
+        default:
+            break;
     }
 }
+
+/* -------------------------------------------------------------------------- */
 
 static void gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if, esp_ble_gatts_cb_param_t *param)
 {
     esp_ble_gatts_cb_param_t *p_data = (esp_ble_gatts_cb_param_t *) param;
     uint8_t res = 0xff;
 
-    ESP_LOGI(GATTS_TABLE_TAG, "event = %x",event);
+    // ESP_LOGI(GATTS_TAG, "event = %x",event);
     switch (event) 
     {
     	case ESP_GATTS_REG_EVT:
-    	    ESP_LOGI(GATTS_TABLE_TAG, "%s %d", __func__, __LINE__);
+    	    ESP_LOGI(GATTS_TAG, "%s %d", __func__, __LINE__);
         	esp_ble_gap_set_device_name(SAMPLE_DEVICE_NAME);
 
-        	ESP_LOGI(GATTS_TABLE_TAG, "%s %d", __func__, __LINE__);
+        	ESP_LOGI(GATTS_TAG, "%s %d", __func__, __LINE__);
         	esp_ble_gap_config_adv_data_raw((uint8_t *)spp_adv_data, sizeof(spp_adv_data));
 
-        	ESP_LOGI(GATTS_TABLE_TAG, "%s %d", __func__, __LINE__);
+        	ESP_LOGI(GATTS_TAG, "%s %d", __func__, __LINE__);
         	esp_ble_gatts_create_attr_tab(spp_gatt_db, gatts_if, SPP_IDX_NB, SPP_SVC_INST_ID);
        	break;
 
@@ -399,77 +325,137 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_
        	 break;
 
     	case ESP_GATTS_WRITE_EVT: 
-            {
+        {
     	    res = find_char_and_desr_index(p_data->write.handle);
-            if(p_data->write.is_prep == false)
+            
+            if( p_data->write.is_prep == false )
             {
-                ESP_LOGI(GATTS_TABLE_TAG, "ESP_GATTS_WRITE_EVT : handle = %d", res);
-                if(res == SPP_IDX_SPP_COMMAND_VAL)
-                {
-                    uint8_t * spp_cmd_buff = NULL;
-                    spp_cmd_buff = (uint8_t *)malloc((spp_mtu_size - 3) * sizeof(uint8_t));
-                    if(spp_cmd_buff == NULL)
-                    {
-                        ESP_LOGE(GATTS_TABLE_TAG, "%s malloc failed", __func__);
-                        break;
-                    }
-                    memset(spp_cmd_buff,0x0,(spp_mtu_size - 3));
-                    memcpy(spp_cmd_buff,p_data->write.value,p_data->write.len);
+                // ESP_LOGI(GATTS_TAG, "ESP_GATTS_WRITE_EVT : handle = %d", res);
 
-                    esp_log_buffer_char(GATTS_TABLE_TAG,(char *)(spp_cmd_buff),strlen((char *)spp_cmd_buff));
-                    free(spp_cmd_buff);
+                switch( res )
+                {
+                    case SPP_IDX_SPP_COMMAND_VAL:
+                        uint8_t * spp_cmd_buff = NULL;
+                        spp_cmd_buff = (uint8_t *)malloc((spp_mtu_size - 3) * sizeof(uint8_t));
+                        if(spp_cmd_buff == NULL)
+                        {
+                            ESP_LOGE(GATTS_TAG, "%s malloc failed", __func__);
+                            break;
+                        }
+                        memset(spp_cmd_buff, 0x00, (spp_mtu_size - 3));
+                        memcpy(spp_cmd_buff, p_data->write.value, p_data->write.len);
 
-                }
-                else if(res == SPP_IDX_SPP_DATA_NTF_CFG)
-                {
-                    if((p_data->write.len == 2)&&(p_data->write.value[0] == 0x01)&&(p_data->write.value[1] == 0x00))
-                    {
-                        enable_data_ntf = true;
-                    }
-                    else if((p_data->write.len == 2)&&(p_data->write.value[0] == 0x00)&&(p_data->write.value[1] == 0x00))
-                    {
-                        enable_data_ntf = false;
-                    }
-                }
+                        esp_log_buffer_char( GATTS_TAG, (char *)(spp_cmd_buff), strlen((char *)spp_cmd_buff) );
+                        free( spp_cmd_buff );
+                    break;
 
-                else if(res == SPP_IDX_SPP_DATA_RECV_VAL)
-                {
-                    esp_log_buffer_char(GATTS_TABLE_TAG,(char *)(p_data->write.value),p_data->write.len);
-                    uart_write_bytes(UART_NUM_0, (char *)(p_data->write.value), p_data->write.len);
+                    case SPP_IDX_SPP_DATA_NTF_CFG:
+                        if(    ( p_data->write.len == 2 )
+                            && ( p_data->write.value[0] == 0x01 )
+                            && ( p_data->write.value[1] == 0x00 ) 
+                          )
+                        {
+                            enable_data_ntf = true;
+                        }
+                        else if( (p_data->write.len == 2)&&(p_data->write.value[0] == 0x00)&&(p_data->write.value[1] == 0x00))
+                        {
+                            enable_data_ntf = false;
+                        }
+                    break;
+
+                    case SPP_IDX_SPP_DATA_RECV_VAL:
+                        // esp_log_buffer_char(GATTS_TAG,(char *)(p_data->write.value),p_data->write.len);
+
+                        // Post an event to the user-space event queue with the inbound data
+                        if( user_evt_queue )
+                        {
+                            spp_event_t evt;
+                            spp_event_recv_cb_t *recv_cb = &evt.data.recv_cb;
+                            evt.id = SPP_RECV_CB;
+
+                            // Allocate a sufficiently large chunk of memory and copy the payload into it
+                            // User task is responsible for freeing this memory
+                            recv_cb->data = malloc( p_data->write.len );
+                            if( recv_cb->data == NULL )
+                            {
+                                ESP_LOGE(GATTS_TAG, "RX Malloc fail");
+                                return;
+                            }
+
+                            memcpy(recv_cb->data, p_data->write.value, p_data->write.len);
+                            recv_cb->data_len = p_data->write.len;
+
+                            // Put the event into the queue for processing
+                            if( xQueueSend(*user_evt_queue, &evt, 512) != pdTRUE )
+                            {
+                                ESP_LOGW(GATTS_TAG, "RX event failed to enqueue");
+                                free(recv_cb->data);
+                            }
+                        }
+                    break;
                 }
-                else
-                {
-                    //TODO:
-                }
+             
             }
-            else if((p_data->write.is_prep == true)&&(res == SPP_IDX_SPP_DATA_RECV_VAL))
+            else if(   (p_data->write.is_prep == true)
+                    && (res == SPP_IDX_SPP_DATA_RECV_VAL) )
             {
-                ESP_LOGI(GATTS_TABLE_TAG, "ESP_GATTS_PREP_WRITE_EVT : handle = %d", res);
+                ESP_LOGI(GATTS_TAG, "ESP_GATTS_PREP_WRITE_EVT : handle = %d", res);
                 store_wr_buffer(p_data);
             }
       	 	break;
     	}
+
     	case ESP_GATTS_EXEC_WRITE_EVT:{
-    	    ESP_LOGI(GATTS_TABLE_TAG, "ESP_GATTS_EXEC_WRITE_EVT");
-    	    if(p_data->exec_write.exec_write_flag)
+    	    // ESP_LOGI(GATTS_TAG, "ESP_GATTS_EXEC_WRITE_EVT");
+
+    	    if( p_data->exec_write.exec_write_flag )
             {
                 temp_spp_recv_data_node_p1 = SppRecvDataBuff.first_node;
 
                 // TODO: rework this
-                while(temp_spp_recv_data_node_p1 != NULL)
+                while( temp_spp_recv_data_node_p1 != NULL )
                 {
-                    uart_write_bytes(UART_NUM_0, (char *)(temp_spp_recv_data_node_p1->node_buff), temp_spp_recv_data_node_p1->len);
+                    // Post an event to the user-space event queue with the inbound data
+                    if( user_evt_queue )
+                    {
+                        spp_event_t evt;
+                        spp_event_recv_cb_t *recv_cb = &evt.data.recv_cb;
+                        evt.id = SPP_RECV_CB;
+
+                        // Allocate a sufficiently large chunk of memory and copy the payload into it
+                        // User task is responsible for freeing this memory
+                        recv_cb->data = malloc( temp_spp_recv_data_node_p1->len );
+                        if( recv_cb->data == NULL )
+                        {
+                            ESP_LOGE(GATTS_TAG, "RX Malloc fail");
+                            return;
+                        }
+
+                        memcpy(recv_cb->data, temp_spp_recv_data_node_p1->node_buff, temp_spp_recv_data_node_p1->len);
+                        recv_cb->data_len = temp_spp_recv_data_node_p1->len;
+
+                        // Put the event into the queue for processing
+                        if( xQueueSend(*user_evt_queue, &evt, 512) != pdTRUE )
+                        {
+                            ESP_LOGW(GATTS_TAG, "RX event failed to enqueue");
+                            free(recv_cb->data);
+                        }
+                    }                    
+
                     temp_spp_recv_data_node_p1 = temp_spp_recv_data_node_p1->next_node;
                 }
 
 	            temp_spp_recv_data_node_p1 = SppRecvDataBuff.first_node;
 
-                while(temp_spp_recv_data_node_p1 != NULL)
+                while( temp_spp_recv_data_node_p1 != NULL )
                 {
                     temp_spp_recv_data_node_p2 = temp_spp_recv_data_node_p1->next_node;
-                    if (temp_spp_recv_data_node_p1->node_buff) {
+
+                    if (temp_spp_recv_data_node_p1->node_buff) 
+                    {
                         free(temp_spp_recv_data_node_p1->node_buff);
                     }
+
                     free(temp_spp_recv_data_node_p1);
                     temp_spp_recv_data_node_p1 = temp_spp_recv_data_node_p2;
                 }
@@ -480,11 +466,37 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_
     	    }
     	    break;
     	}
+
     	case ESP_GATTS_MTU_EVT:
     	    spp_mtu_size = p_data->mtu.mtu;
     	    break;
+
     	case ESP_GATTS_CONF_EVT:
+            esp_gatt_status_t status = param->conf.status;
+            uint16_t conn_id = param->conf.conn_id;
+            uint16_t attr_handle = param->conf.handle;
+
+            if (status == ESP_GATT_OK) {
+                // ESP_LOGI(GATTS_TAG, "Confirmation for conn_id: %d, attr_handle: %d", conn_id, attr_handle);
+                if( user_evt_queue )
+                {
+                    spp_event_t evt;
+                    spp_event_send_cb_t *send_cb = &evt.data.send_cb;
+                    evt.id = SPP_SEND_CB;
+                    send_cb->bytes_sent = 0;
+
+                    // Put the event into the queue for processing
+                    if( xQueueSend(*user_evt_queue, &evt, 512) != pdTRUE )
+                    {
+                        ESP_LOGW(GATTS_TAG, "Send event failed to enqueue");
+                    }
+                }
+            } else {
+                ESP_LOGE(GATTS_TAG, "Conf failed for conn_id: %d, attr_handle: %d, status: %d", conn_id, attr_handle, status);
+            }
+
     	    break;
+
     	case ESP_GATTS_UNREG_EVT:
         	break;
     	case ESP_GATTS_DELETE_EVT:
@@ -493,6 +505,7 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_
         	break;
     	case ESP_GATTS_STOP_EVT:
         	break;
+
     	case ESP_GATTS_CONNECT_EVT:
     	    spp_conn_id = p_data->connect.conn_id;
     	    spp_gatts_if = gatts_if;
@@ -500,12 +513,13 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_
     	    memcpy(&spp_remote_bda,&p_data->connect.remote_bda,sizeof(esp_bd_addr_t));
 
         	break;
+
     	case ESP_GATTS_DISCONNECT_EVT:
     	    is_connected = false;
     	    enable_data_ntf = false;
-
     	    esp_ble_gap_start_advertising(&spp_adv_params);
     	    break;
+
     	case ESP_GATTS_OPEN_EVT:
     	    break;
     	case ESP_GATTS_CANCEL_OPEN_EVT:
@@ -516,15 +530,18 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_
     	    break;
     	case ESP_GATTS_CONGEST_EVT:
     	    break;
-    	case ESP_GATTS_CREAT_ATTR_TAB_EVT:{
-    	    ESP_LOGI(GATTS_TABLE_TAG, "The number handle =%x",param->add_attr_tab.num_handle);
+
+    	case ESP_GATTS_CREAT_ATTR_TAB_EVT:
+        {
+    	    ESP_LOGI(GATTS_TAG, "The number handle =%x",param->add_attr_tab.num_handle);
+
     	    if (param->add_attr_tab.status != ESP_GATT_OK)
             {
-    	        ESP_LOGE(GATTS_TABLE_TAG, "Create attribute table failed, error code=0x%x", param->add_attr_tab.status);
+    	        ESP_LOGE(GATTS_TAG, "Create attribute table failed, error code=0x%x", param->add_attr_tab.status);
     	    }
     	    else if (param->add_attr_tab.num_handle != SPP_IDX_NB)
             {
-    	        ESP_LOGE(GATTS_TABLE_TAG, "Create attribute table abnormally, num_handle (%d) doesn't equal to HRS_IDX_NB(%d)", param->add_attr_tab.num_handle, SPP_IDX_NB);
+    	        ESP_LOGE(GATTS_TAG, "Create attribute table abnormally, num_handle (%d) doesn't equal to HRS_IDX_NB(%d)", param->add_attr_tab.num_handle, SPP_IDX_NB);
     	    }
     	    else
             {
@@ -533,18 +550,20 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_
     	    }
     	    break;
     	}
+
     	default:
     	    break;
     }
 }
 
+/* -------------------------------------------------------------------------- */
 
 static void gatts_event_handler(esp_gatts_cb_event_t event, 
                                 esp_gatt_if_t gatts_if, 
                                 esp_ble_gatts_cb_param_t *param
                                )
 {
-    ESP_LOGI(GATTS_TABLE_TAG, "EVT %d, gatts if %d", event, gatts_if);
+    // ESP_LOGI(GATTS_TAG, "EVT %d, gatts if %d", event, gatts_if);
 
     /* If event is register event, store the gatts_if for each profile */
     if (event == ESP_GATTS_REG_EVT)
@@ -555,7 +574,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
         }
         else
         {
-            ESP_LOGI(GATTS_TABLE_TAG, "Reg app failed, app_id %04x, status %d",param->reg.app_id, param->reg.status);
+            ESP_LOGI(GATTS_TAG, "Reg app failed, app_id %04x, status %d",param->reg.app_id, param->reg.status);
             return;
         }
     }
@@ -572,18 +591,46 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
     }
 }
 
-
-
-
-
 /* -------------------------------------------------------------------------- */
 
 void ble_server_register_callbacks( void )
 {
-    esp_ble_gap_register_callback(gap_event_handler);
-    esp_ble_gatts_register_callback(gatts_event_handler);
-    esp_ble_gatts_app_register(ESP_SPP_APP_ID);
-    // esp_ble_gatt_set_local_mtu(200);
+    esp_ble_gap_register_callback( gap_event_handler );
+    esp_ble_gatts_register_callback( gatts_event_handler );
+    esp_ble_gatts_app_register( ESP_SPP_APP_ID );
+}
+
+/* -------------------------------------------------------------------------- */
+
+void ble_server_register_user_evt_queue( QueueHandle_t *queue )
+{
+    if( queue )
+    {
+        user_evt_queue = queue;
+    }
+}
+
+/* -------------------------------------------------------------------------- */
+
+void ble_server_send_payload( uint8_t* buffer, uint16_t length )
+{
+    if(enable_data_ntf && is_connected)
+    {
+        if(length <= (spp_mtu_size - 3))
+        {
+            esp_ble_gatts_send_indicate(    spp_gatts_if, 
+                                            spp_conn_id, 
+                                            spp_handle_table[SPP_IDX_SPP_DATA_NTY_VAL], 
+                                            length, 
+                                            buffer, 
+                                            false
+                                        );
+        }
+        else
+        {
+            ESP_LOGI(GATTS_TAG, "Rejected %dB send, mtu is %d", length, spp_mtu_size);
+        }
+    }
 }
 
 /* -------------------------------------------------------------------------- */

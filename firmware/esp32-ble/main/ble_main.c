@@ -3,11 +3,12 @@
 #define SERVER 0
 #define CLIENT 1
 #define BLE_SPP_MODE (SERVER)
+// #define BLE_SPP_MODE (CLIENT)
 
 // Packet size test length settings
-#define PAYLOAD_12B
+// #define PAYLOAD_12B
 // #define PAYLOAD_128B
-// #define PAYLOAD_1024B
+#define PAYLOAD_1024B
 
 /* -------------------------------------------------------------------------- */
 
@@ -30,6 +31,8 @@
 #include "nvs_flash.h"
 #include "esp_log.h"
 #include "driver/gpio.h"
+
+#include "ble_main_defs.h"
 
 #if BLE_SPP_MODE == SERVER
     #include "server.h"
@@ -59,34 +62,7 @@ static const char *TAG = "espble";
 #define SPP_QUEUE_SIZE (8)
 static QueueHandle_t spp_evt_queue;
 
-typedef enum {
-    SPP_SEND_CB,
-    SPP_RECV_CB,
-} spp_event_id_t;
 
-typedef struct {
-    uint32_t bytes_sent;
-    bool congested;
-} spp_event_send_cb_t;
-
-typedef struct {
-    uint8_t *data;
-    uint32_t data_len;
-} spp_event_recv_cb_t;
-
-typedef union {
-    spp_event_send_cb_t send_cb;
-    spp_event_recv_cb_t recv_cb;
-} spp_event_data_t;
-
-// Main task queue needs to support send and receive events
-// The ID field helps distinguish between them
-typedef struct {
-    spp_event_id_t id;
-    spp_event_data_t data;
-} spp_event_t;
-
-uint32_t spp_handle = 0;
 
 /* -------------------------------------------------------------------------- */
 
@@ -95,6 +71,7 @@ volatile bool trigger_pending = false;
 #define CRC_SEED (0xFFFFu)
 uint16_t bytes_read = 0;
 uint16_t bytes_sent = 0;
+uint16_t bytes_pending = 0;
 
 uint16_t working_crc = CRC_SEED;
 uint16_t payload_crc = 0x00;
@@ -332,9 +309,12 @@ void setup_bt( void )
 
 #if BLE_SPP_MODE == SERVER
     ble_server_register_callbacks();
-#else   
+    ble_server_register_user_evt_queue( &spp_evt_queue );
+#else
     ble_client_register_callbacks();
+    ble_client_register_user_evt_queue( &spp_evt_queue );
 #endif
+
 }
 
 /* -------------------------------------------------------------------------- */
@@ -390,23 +370,27 @@ static void benchmark_task(void *pvParameter)
     {
         if( trigger_pending )
         {
-            if( spp_handle )
+
+            // Chunk large payloads into smaller packets
+            bytes_sent = 0;
+
+            uint16_t bytes_to_send = sizeof(test_payload) - bytes_sent;
+            if( bytes_to_send > SPP_DATA_MAX_LEN )
             {
-                // Chunk large payloads into smaller packets
-                bytes_sent = 0;
-
-                uint16_t bytes_to_send = sizeof(test_payload) - bytes_sent;
-                if( bytes_to_send > SPP_DATA_MAX_LEN )
-                {
-                    bytes_to_send = SPP_DATA_MAX_LEN;
-                }
-                
-                //esp_spp_write(spp_handle, bytes_to_send, &test_payload[bytes_sent] );
-
-                // Once the packet is sent, ESP_SPP_WRITE_EVT fires with how many bytes were sent.
-                // Subsequent chunks are sent from the event queue logic below 
+                bytes_to_send = SPP_DATA_MAX_LEN;
             }
+            
+            // ESP_LOGI(TAG, "Trig. Sending %iB", bytes_to_send );
 
+#if BLE_SPP_MODE == SERVER
+            ble_server_send_payload( &test_payload[bytes_sent], bytes_to_send );
+            // We use ESP_GATTS_CONF_EVT to get positive confirmation that the notification
+            // was recieved by the client
+            bytes_pending = bytes_to_send;
+#else
+            ble_client_send_payload( &test_payload[bytes_sent], bytes_to_send );
+#endif
+            
             trigger_pending = false;
         }
 
@@ -423,31 +407,31 @@ static void benchmark_task(void *pvParameter)
                     // ESP_LOGI(TAG, "At %i, Wrote %"PRIu32"B, CON: %i", bytes_sent, send_cb->bytes_sent, send_cb->congested);
 
                     // Update index of sent data (for multi-packet transfers)
-                    bytes_sent += send_cb->bytes_sent;
-
-                    // If the link isn't congested, send more data as needed
-                    if( !send_cb->congested )
+                    bytes_sent += bytes_pending;
+                    bytes_pending = 0;
+                    // Send the next chunk if needed
+                    if( bytes_sent < sizeof(test_payload) )
                     {
-                        // Send the next chunk if needed
-                        if( bytes_sent < sizeof(test_payload) )
+                        uint16_t bytes_to_send = sizeof(test_payload) - bytes_sent;
+                        if( bytes_to_send > SPP_DATA_MAX_LEN )
                         {
-                            uint16_t bytes_to_send = sizeof(test_payload) - bytes_sent;
-                            if( bytes_to_send > SPP_DATA_MAX_LEN )
-                            {
-                                bytes_to_send = SPP_DATA_MAX_LEN;
-                            }
+                            bytes_to_send = SPP_DATA_MAX_LEN;
+                        }
 
-                            //esp_spp_write(spp_handle, bytes_to_send, &test_payload[bytes_sent]);
-                        }
-                        else
-                        {
-                            bytes_sent = 0;
-                            // ESP_LOGI(TAG, "FIN \n");
-                        }
+                        // ESP_LOGI(TAG, "Cont. Sending %iB", bytes_to_send );
+
+#if BLE_SPP_MODE == SERVER
+                        ble_server_send_payload( &test_payload[bytes_sent], bytes_to_send );
+                        bytes_pending = bytes_to_send;
+#else
+                        ble_client_send_payload( &test_payload[bytes_sent], bytes_to_send );
+#endif
                     }
                     else
                     {
-                        // ESP_LOGI(TAG, "...");
+                        bytes_sent = 0;
+                        bytes_pending = 0;
+                        // ESP_LOGI(TAG, "FIN \n");
                     }
   
                     break;
@@ -468,7 +452,6 @@ static void benchmark_task(void *pvParameter)
                             bytes_read = 0;
                             working_crc = CRC_SEED;
                             // ESP_LOGI(TAG, "RESET\n");
-
                         }
 
                         // Running crc and byte count

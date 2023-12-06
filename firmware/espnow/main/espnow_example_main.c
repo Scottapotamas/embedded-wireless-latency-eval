@@ -2,9 +2,14 @@
 #include <time.h>
 #include <string.h>
 #include <assert.h>
+#include <stdio.h>
+#include <inttypes.h>
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/timers.h"
+#include "freertos/task.h"
+
 #include "nvs_flash.h"
 #include "esp_random.h"
 #include "esp_event.h"
@@ -15,9 +20,6 @@
 #include "esp_now.h"
 #include "esp_crc.h"
 
-#include <stdio.h>
-#include <inttypes.h>
-#include "freertos/task.h"
 #include "driver/gpio.h"
 
 /* -------------------------------------------------------------------------- */

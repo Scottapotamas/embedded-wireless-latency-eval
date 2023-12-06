@@ -4,20 +4,24 @@
 #include <stdio.h>
 
 #include "client.h"
+#include "ble_main_defs.h"
 
 #include "esp_bt.h"
-#include "nvs_flash.h"
 #include "esp_bt_device.h"
 #include "esp_gap_ble_api.h"
 #include "esp_gattc_api.h"
 #include "esp_gatt_defs.h"
 #include "esp_bt_main.h"
-#include "esp_system.h"
 #include "esp_gatt_common_api.h"
+
 #include "esp_log.h"
-#include "freertos/FreeRTOS.h"
+#include "esp_system.h"
+#include "nvs_flash.h"
+
 
 /* -------------------------------------------------------------------------- */
+
+static QueueHandle_t *user_evt_queue;
 
 /* -------------------------------------------------------------------------- */
 
@@ -41,8 +45,6 @@ struct gattc_profile_inst {
     uint16_t char_handle;
     esp_bd_addr_t remote_bda;
 };
-
-
 
 /* -------------------------------------------------------------------------- */
 
@@ -70,20 +72,16 @@ static esp_ble_scan_params_t ble_scan_params = {
 };
 
 static const char device_name[] = "ESP_SPP_SERVER";
-static bool is_connect = false;
+static bool is_connected = false;
 static uint16_t spp_conn_id = 0;
 static uint16_t spp_mtu_size = 23;
 static uint16_t cmd = 0;
 static uint16_t spp_srv_start_handle = 0;
 static uint16_t spp_srv_end_handle = 0;
 static uint16_t spp_gattc_if = 0xff;
-static char * notify_value_p = NULL;
-static int notify_value_offset = 0;
-static int notify_value_count = 0;
 static uint16_t count = SPP_IDX_NB;
 static esp_gattc_db_elem_t *db = NULL;
 static esp_ble_gap_cb_param_t scan_rst;
-
 
 static esp_bt_uuid_t spp_service_uuid = {
     .len  = ESP_UUID_LEN_16,
@@ -95,8 +93,8 @@ static esp_bt_uuid_t spp_service_uuid = {
 static void notify_event_handler(esp_ble_gattc_cb_param_t * p_data)
 {
     uint8_t handle = 0;
-
-    if(p_data->notify.is_notify == true)
+/*
+    if( p_data->notify.is_notify )
     {
         ESP_LOGI(GATTC_TAG,"+NOTIFY:handle = %d,length = %d ", p_data->notify.handle, p_data->notify.value_len);
     }
@@ -104,99 +102,66 @@ static void notify_event_handler(esp_ble_gattc_cb_param_t * p_data)
     {
         ESP_LOGI(GATTC_TAG,"+INDICATE:handle = %d,length = %d ", p_data->notify.handle, p_data->notify.value_len);
     }
-
+*/
     handle = p_data->notify.handle;
-    if(db == NULL) 
+    if( db == NULL ) 
     {
         ESP_LOGE(GATTC_TAG, " %s db is NULL", __func__);
         return;
     }
 
-    if(handle == db[SPP_IDX_SPP_DATA_NTY_VAL].attribute_handle)
+    if( handle == db[SPP_IDX_SPP_DATA_NTY_VAL].attribute_handle )
     {
-        esp_log_buffer_char(GATTC_TAG, (char *)p_data->notify.value, p_data->notify.value_len);
+        // esp_log_buffer_char(GATTC_TAG, (char *)p_data->notify.value, p_data->notify.value_len);
 
-        if((p_data->notify.value[0] == '#')&&(p_data->notify.value[1] == '#'))
+        // Post an event to the user-space event queue with the inbound data
+        if( user_evt_queue )
         {
-            if((++notify_value_count) != p_data->notify.value[3])
-            {
-                if(notify_value_p != NULL)
-                {
-                    free(notify_value_p);
-                }
+            spp_event_t evt;
+            spp_event_recv_cb_t *recv_cb = &evt.data.recv_cb;
+            evt.id = SPP_RECV_CB;
 
-                notify_value_count = 0;
-                notify_value_p = NULL;
-                notify_value_offset = 0;
-                ESP_LOGE(GATTC_TAG,"notify value count is not continuous,%s",__func__);
+            // Allocate a sufficiently large chunk of memory and copy the payload into it
+            // User task is responsible for freeing this memory
+            recv_cb->data = malloc( p_data->notify.value_len );
+            if( recv_cb->data == NULL )
+            {
+                ESP_LOGE(GATTC_TAG, "RX Malloc fail");
                 return;
             }
 
-            if(p_data->notify.value[3] == 1)
-            {
-                notify_value_p = (char *)malloc(((spp_mtu_size-7)*(p_data->notify.value[2]))*sizeof(char));
-                if(notify_value_p == NULL)
-                {
-                    ESP_LOGE(GATTC_TAG, "malloc failed,%s L#%d",__func__,__LINE__);
-                    notify_value_count = 0;
-                    return;
-                }
+            memcpy(recv_cb->data, p_data->notify.value, p_data->notify.value_len);
+            recv_cb->data_len = p_data->notify.value_len;
 
-                memcpy((notify_value_p + notify_value_offset),(p_data->notify.value + 4),(p_data->notify.value_len - 4));
-                if(p_data->notify.value[2] == p_data->notify.value[3])
-                {
-                    // uart_write_bytes(UART_NUM_0, (char *)(notify_value_p), (p_data->notify.value_len - 4 + notify_value_offset));
-                    free(notify_value_p);
-                    notify_value_p = NULL;
-                    notify_value_offset = 0;
-                    return;
-                }
-
-                notify_value_offset += (p_data->notify.value_len - 4);
-            }
-            else if(p_data->notify.value[3] <= p_data->notify.value[2])
+            // Put the event into the queue for processing
+            if( xQueueSend(*user_evt_queue, &evt, 512) != pdTRUE )
             {
-                memcpy((notify_value_p + notify_value_offset),(p_data->notify.value + 4),(p_data->notify.value_len - 4));
-                if(p_data->notify.value[3] == p_data->notify.value[2])
-                {
-                    // uart_write_bytes(UART_NUM_0, (char *)(notify_value_p), (p_data->notify.value_len - 4 + notify_value_offset));
-                    free(notify_value_p);
-                    notify_value_count = 0;
-                    notify_value_p = NULL;
-                    notify_value_offset = 0;
-                    return;
-                }
-                notify_value_offset += (p_data->notify.value_len - 4);
+                ESP_LOGW(GATTC_TAG, "RX event failed to enqueue");
+                free(recv_cb->data);
             }
         }
-        else
-        {
-            // uart_write_bytes(UART_NUM_0, (char *)(p_data->notify.value), p_data->notify.value_len);
-        }
+        
     }
-    else if(handle == ((db+SPP_IDX_SPP_STATUS_VAL)->attribute_handle))
+    else if( handle == ((db+SPP_IDX_SPP_STATUS_VAL)->attribute_handle) )
     {
-        esp_log_buffer_char(GATTC_TAG, (char *)p_data->notify.value, p_data->notify.value_len);
+        // esp_log_buffer_char(GATTC_TAG, (char *)p_data->notify.value, p_data->notify.value_len);
         //TODO:server notify status characteristic
     }
     else
     {
-        esp_log_buffer_char(GATTC_TAG, (char *)p_data->notify.value, p_data->notify.value_len);
+        // esp_log_buffer_char(GATTC_TAG, (char *)p_data->notify.value, p_data->notify.value_len);
     }
 }
 
 static void free_gattc_srv_db(void)
 {
-    is_connect = false;
+    is_connected = false;
     spp_gattc_if = 0xff;
     spp_conn_id = 0;
     spp_mtu_size = 23;
     cmd = 0;
     spp_srv_start_handle = 0;
     spp_srv_end_handle = 0;
-    notify_value_p = NULL;
-    notify_value_offset = 0;
-    notify_value_count = 0;
     if(db)
     {
         free(db);
@@ -243,7 +208,7 @@ static void esp_gap_cb( esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *pa
                 break;
             }
             ESP_LOGI(GATTC_TAG, "Scan stop successed");
-            if (is_connect == false) 
+            if (is_connected == false) 
             {
                 ESP_LOGI(GATTC_TAG, "Connect to the remote device.");
                 esp_ble_gattc_open(gl_profile_tab[PROFILE_APP_ID].gattc_if, scan_rst.scan_rst.bda, scan_rst.scan_rst.ble_addr_type, true);
@@ -261,7 +226,6 @@ static void esp_gap_cb( esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *pa
                     adv_name = esp_ble_resolve_adv_data(scan_result->scan_rst.ble_adv, ESP_BLE_AD_TYPE_NAME_CMPL, &adv_name_len);
                     ESP_LOGI(GATTC_TAG, "Searched Device Name Len %d", adv_name_len);
                     esp_log_buffer_char(GATTC_TAG, adv_name, adv_name_len);
-                    ESP_LOGI(GATTC_TAG, " ");
                     
                     if (adv_name != NULL) 
                     {
@@ -297,7 +261,7 @@ static void esp_gattc_cb( esp_gattc_cb_event_t event,
                           esp_ble_gattc_cb_param_t *param
                         )
 {
-    ESP_LOGI(GATTC_TAG, "EVT %d, gattc if %d", event, gattc_if);
+    // ESP_LOGI(GATTC_TAG, "EVT %d, gattc if %d", event, gattc_if);
 
     /* If event is register event, store the gattc_if for each profile */
     if (event == ESP_GATTC_REG_EVT) 
@@ -347,7 +311,7 @@ static void gattc_profile_event_handler(    esp_gattc_cb_event_t event,
             ESP_LOGI(GATTC_TAG, "REMOTE BDA:");
             esp_log_buffer_hex(GATTC_TAG, gl_profile_tab[PROFILE_APP_ID].remote_bda, sizeof(esp_bd_addr_t));
             spp_gattc_if = gattc_if;
-            is_connect = true;
+            is_connected = true;
             spp_conn_id = p_data->connect.conn_id;
             memcpy(gl_profile_tab[PROFILE_APP_ID].remote_bda, p_data->connect.remote_bda, sizeof(esp_bd_addr_t));
             esp_ble_gattc_search_service(spp_gattc_if, spp_conn_id, &spp_service_uuid);
@@ -391,7 +355,7 @@ static void gattc_profile_event_handler(    esp_gattc_cb_event_t event,
         }
 
         case ESP_GATTC_NOTIFY_EVT:
-            ESP_LOGI(GATTC_TAG,"ESP_GATTC_NOTIFY_EVT");
+            // ESP_LOGI(GATTC_TAG,"ESP_GATTC_NOTIFY_EVT");
             notify_event_handler(p_data);
             break;
 
@@ -400,6 +364,7 @@ static void gattc_profile_event_handler(    esp_gattc_cb_event_t event,
             break;
 
         case ESP_GATTC_WRITE_CHAR_EVT:
+            // TODO: Add write callback here?
             ESP_LOGI(GATTC_TAG,"ESP_GATTC_WRITE_CHAR_EVT:status = %d,handle = %d", param->write.status, param->write.handle);
             if(param->write.status != ESP_GATT_OK)
             {
@@ -416,6 +381,7 @@ static void gattc_profile_event_handler(    esp_gattc_cb_event_t event,
 
         case ESP_GATTC_WRITE_DESCR_EVT:
             ESP_LOGI(GATTC_TAG,"ESP_GATTC_WRITE_DESCR_EVT: status =%d,handle = %d", p_data->write.status, p_data->write.handle);
+
             if(p_data->write.status != ESP_GATT_OK)
             {
                 ESP_LOGE(GATTC_TAG, "ESP_GATTC_WRITE_DESCR_EVT, error status = %d", p_data->write.status);
@@ -463,9 +429,9 @@ static void gattc_profile_event_handler(    esp_gattc_cb_event_t event,
                 break;
             }
 
-            for(int i = 0;i < SPP_IDX_NB;i++)
+            for( int i = 0; i < SPP_IDX_NB; i++ )
             {
-                switch((db+i)->type)
+                switch( (db+i)->type )
                 {
                     case ESP_GATT_DB_PRIMARY_SERVICE:
                         ESP_LOGI(GATTC_TAG,"attr_type = PRIMARY_SERVICE,attribute_handle=%d,start_handle=%d,end_handle=%d,properties=0x%x,uuid=0x%04x",\
@@ -521,10 +487,6 @@ static void gattc_profile_event_handler(    esp_gattc_cb_event_t event,
 
 /* -------------------------------------------------------------------------- */
 
-
-
-/* -------------------------------------------------------------------------- */
-
 void ble_client_register_callbacks( void )
 {
     esp_ble_gap_register_callback(esp_gap_cb);
@@ -536,11 +498,37 @@ void ble_client_register_callbacks( void )
 
 /* -------------------------------------------------------------------------- */
 
-// esp_ble_gattc_write_char( spp_gattc_if,
-//                           spp_conn_id,
-//                           (db+SPP_IDX_SPP_DATA_RECV_VAL)->attribute_handle,
-//                           event.size,
-//                           temp,
-//                           ESP_GATT_WRITE_TYPE_RSP,
-//                           ESP_GATT_AUTH_REQ_NONE);
+void ble_client_register_user_evt_queue( QueueHandle_t *queue )
+{
+    if( queue )
+    {
+        user_evt_queue = queue;
+    }
+}
 
+/* -------------------------------------------------------------------------- */
+
+void ble_client_send_payload( uint8_t* buffer, uint16_t length )
+{
+    if(    is_connected 
+        && ( db != NULL ) 
+        && ( (db+SPP_IDX_SPP_DATA_RECV_VAL)->properties & (ESP_GATT_CHAR_PROP_BIT_WRITE_NR | ESP_GATT_CHAR_PROP_BIT_WRITE)) )
+    {
+        if( length <= (spp_mtu_size - 3) )
+        {
+            esp_ble_gattc_write_char( spp_gattc_if,
+                          spp_conn_id,
+                          (db+SPP_IDX_SPP_DATA_RECV_VAL)->attribute_handle,
+                          length,
+                          buffer,
+                          ESP_GATT_WRITE_TYPE_RSP,
+                          ESP_GATT_AUTH_REQ_NONE);
+        }
+        else
+        {
+            ESP_LOGI(GATTC_TAG, "Rejected %dB send, mtu is %d", length, spp_mtu_size);
+        }
+    }
+}
+
+/* -------------------------------------------------------------------------- */
