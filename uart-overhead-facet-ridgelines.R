@@ -12,8 +12,6 @@ data <- read.csv("increasing-baudrate-transport-duration-removed.csv",
                  check.names = FALSE, 
                  stringsAsFactors = FALSE)
 
-column_order <- names(data)
-
 # Reshape from wide to long format
 data_long <- data %>%
   pivot_longer(
@@ -25,16 +23,12 @@ data_long <- data %>%
   mutate(baudrate = gsub("-.*", "", category),
          # Create the subgroup column by extracting the type (POLL, IRQ, DMA)
          subgroup = gsub(".*-", "", category)) 
-  # Convert 'category' to a factor with levels defined by column order from the CSV
-  # mutate(category = factor(category, levels = column_order))  
-  # mutate(category = factor(category, levels = rev(column_order)))  
 
 # Convert baudrate to numeric to sort numerically
 data_long$baudrate <- as.numeric(as.character(data_long$baudrate))
 
 # Order the baudrate numerically and then convert back to a factor
 data_long$baudrate <- factor(data_long$baudrate, levels = sort(unique(data_long$baudrate), decreasing = FALSE))
-
 
 # Convert to microseconds
 data_long$duration <- data_long$duration/1e3
@@ -118,14 +112,13 @@ p <- data_long %>%
   
   # # Annotation arrow to show data going off edge of plot
   # annotate(
-  #   "segment", 
-  #   x = 1, 
-  #   xend = 1, 
-  #   y = 16.9, 
-  #   yend = 17.9, 
-  #   arrow = arrow(length = unit(0.4, "cm")), 
+  #   "segment",
+  #   x = 1,
+  #   xend = 1,
+  #   y = 16.9,
+  #   yend = 17.9,
+  #   arrow = arrow(length = unit(0.4, "cm")),
   #   linewidth = 1,
-  #   colour = less_saturated_colors[1]
   # ) +
   # 
   # annotate(
@@ -192,13 +185,9 @@ p <- data_long %>%
           panel.spacing = unit(0.5, "lines")
 
           #axis.line.y = element_line(color = "grey", size = 1) # Adjust line thickness
-          #panel.grid.minor = element_blank(),
-          #panel.grid.major.y = element_blank(),
-          #axis.ticks = element_blank(),
-          #axis.text.x = element_text(family = "Roboto Mono"),
         )
 
-p
+p 
 
 save_plot("test.svg", fig = p, width=30, height=28)
 
