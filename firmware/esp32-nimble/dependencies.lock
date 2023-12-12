@@ -1,0 +1,15 @@
+dependencies:
+  idf:
+    component_hash: null
+    source:
+      type: idf
+    version: 5.1.1
+  nimble_central_utils:
+    component_hash: null
+    source:
+      path: /opt/esp/idf/examples/bluetooth/nimble/common/nimble_central_utils
+      type: local
+    version: '*'
+manifest_hash: 794a2cec85e0255abac18143e81a3739195cbf99e41888b669d87b2a217cc088
+target: esp32
+version: 1.0.0
