@@ -195,6 +195,9 @@ static void ble_spp_client_on_disc_complete(const struct peer *peer, int status,
 
     ble_spp_client_set_handle(peer);
     ble_spp_client_subscribe_spp(peer);
+
+    ble_gattc_exchange_mtu(peer->conn_handle, NULL, NULL);
+
     // ble_spp_client_scan();
 }
 
@@ -541,6 +544,9 @@ void ble_client_setup( void )
     assert(rc == 0);
 
     // ble_store_config_init();
+
+    // Set the preferred MTU size
+    ble_att_set_preferred_mtu(200);
 
     nimble_port_freertos_init(ble_spp_client_host_task);
 }

@@ -56,7 +56,7 @@ static const char *TAG = "espble";
 #define SPP_QUEUE_SIZE (8)
 static QueueHandle_t spp_evt_queue;
 
-#define SPP_DATA_MAX_LEN (20)
+#define SPP_DATA_MAX_LEN (197)
 
 /* -------------------------------------------------------------------------- */
 

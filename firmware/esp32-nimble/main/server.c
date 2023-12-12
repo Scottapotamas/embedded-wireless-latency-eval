@@ -51,6 +51,7 @@ struct ble_gatt_register_ctxt;
 static uint8_t own_addr_type;
 static bool conn_handle_subs[CONFIG_BT_NIMBLE_MAX_CONNECTIONS + 1];
 static uint16_t ble_spp_svc_gatt_read_val_handle;
+static uint16_t spp_mtu_size = 23;
 
 // Custom service
 static const struct ble_gatt_svc_def new_ble_svc_gatt_defs[] = {
@@ -280,6 +281,7 @@ static int ble_spp_server_gap_event(struct ble_gap_event *event, void *arg)
                         event->mtu.conn_handle,
                         event->mtu.channel_id,
                         event->mtu.value);
+            spp_mtu_size = event->mtu.value;
             return 0;
 
         case BLE_GAP_EVENT_SUBSCRIBE:
@@ -511,6 +513,8 @@ void ble_server_setup( void )
     rc = ble_svc_gap_device_name_set("nimble-ble-spp-svr");
     assert(rc == 0);
 
+    ble_att_set_preferred_mtu(200);
+
     // ble_store_config_init();
 
     nimble_port_freertos_init(ble_spp_server_host_task);
@@ -533,7 +537,7 @@ void ble_server_send_payload( uint8_t* buffer, uint16_t length )
    for( int i = 0; i <= CONFIG_BT_NIMBLE_MAX_CONNECTIONS; i++ )
    {
         // Check if client has subscribed to notifications
-        if( conn_handle_subs[i] )
+        if( conn_handle_subs[i] && length <= (spp_mtu_size - 3) )
         {
             struct os_mbuf *txom;
             txom = ble_hs_mbuf_from_flat(buffer, length);
