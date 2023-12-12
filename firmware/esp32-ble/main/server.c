@@ -476,7 +476,8 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_
             uint16_t conn_id = param->conf.conn_id;
             uint16_t attr_handle = param->conf.handle;
 
-            if (status == ESP_GATT_OK) {
+            if (status == ESP_GATT_OK)
+            {
                 // ESP_LOGI(GATTS_TAG, "Confirmation for conn_id: %d, attr_handle: %d", conn_id, attr_handle);
                 if( user_evt_queue )
                 {
@@ -491,7 +492,9 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_
                         ESP_LOGW(GATTS_TAG, "Send event failed to enqueue");
                     }
                 }
-            } else {
+            }
+            else
+            {
                 ESP_LOGE(GATTS_TAG, "Conf failed for conn_id: %d, attr_handle: %d, status: %d", conn_id, attr_handle, status);
             }
 

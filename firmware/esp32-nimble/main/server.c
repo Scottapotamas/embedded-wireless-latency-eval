@@ -227,76 +227,93 @@ static int ble_spp_server_gap_event(struct ble_gap_event *event, void *arg)
 
     switch (event->type)
     {
-    case BLE_GAP_EVENT_CONNECT:
-        /* A new connection was established or a connection attempt failed. */
-        ESP_LOGI(TAG, "Connection %s; status=%d ",
-                    event->connect.status == 0 ? "established" : "failed",
-                    event->connect.status);
+        case BLE_GAP_EVENT_CONNECT:
+            /* A new connection was established or a connection attempt failed. */
+            ESP_LOGI(TAG, "Connection %s; status=%d ",
+                        event->connect.status == 0 ? "established" : "failed",
+                        event->connect.status);
 
-        if( event->connect.status == 0 )
-        {
-            rc = ble_gap_conn_find(event->connect.conn_handle, &desc);
+            if( event->connect.status == 0 )
+            {
+                rc = ble_gap_conn_find(event->connect.conn_handle, &desc);
+                assert(rc == 0);
+                ble_spp_server_print_conn_desc(&desc);
+            }
+
+            if( event->connect.status != 0 || CONFIG_BT_NIMBLE_MAX_CONNECTIONS > 1 )
+            {
+                /* Connection failed or if multiple connection allowed; resume advertising. */
+                ble_spp_server_advertise();
+            }
+
+            return 0;
+
+        case BLE_GAP_EVENT_DISCONNECT:
+            ESP_LOGI(TAG, "disconnect; reason=%d ", event->disconnect.reason);
+            ble_spp_server_print_conn_desc(&event->disconnect.conn);
+            ESP_LOGI(TAG, "\n");
+
+            conn_handle_subs[event->disconnect.conn.conn_handle] = false;
+
+            /* Connection terminated; resume advertising. */
+            ble_spp_server_advertise();
+            return 0;
+
+        case BLE_GAP_EVENT_CONN_UPDATE:
+            /* The central has updated the connection parameters. */
+            ESP_LOGI(TAG, "connection updated; status=%d ",
+                        event->conn_update.status);
+            rc = ble_gap_conn_find(event->conn_update.conn_handle, &desc);
             assert(rc == 0);
             ble_spp_server_print_conn_desc(&desc);
-        }
+            ESP_LOGI(TAG, "\n");
+            return 0;
 
-        if( event->connect.status != 0 || CONFIG_BT_NIMBLE_MAX_CONNECTIONS > 1 )
-        {
-            /* Connection failed or if multiple connection allowed; resume advertising. */
+        case BLE_GAP_EVENT_ADV_COMPLETE:
+            ESP_LOGI(TAG, "advertise complete; reason=%d",
+                        event->adv_complete.reason);
             ble_spp_server_advertise();
-        }
+            return 0;
 
-        return 0;
+        case BLE_GAP_EVENT_MTU:
+            ESP_LOGI(TAG, "mtu update event; conn_handle=%d cid=%d mtu=%d\n",
+                        event->mtu.conn_handle,
+                        event->mtu.channel_id,
+                        event->mtu.value);
+            return 0;
 
-    case BLE_GAP_EVENT_DISCONNECT:
-        ESP_LOGI(TAG, "disconnect; reason=%d ", event->disconnect.reason);
-        ble_spp_server_print_conn_desc(&event->disconnect.conn);
-        ESP_LOGI(TAG, "\n");
+        case BLE_GAP_EVENT_SUBSCRIBE:
+            ESP_LOGI(TAG, "subscribe event; conn_handle=%d attr_handle=%d "
+                        "reason=%d prevn=%d curn=%d previ=%d curi=%d\n",
+                        event->subscribe.conn_handle,
+                        event->subscribe.attr_handle,
+                        event->subscribe.reason,
+                        event->subscribe.prev_notify,
+                        event->subscribe.cur_notify,
+                        event->subscribe.prev_indicate,
+                        event->subscribe.cur_indicate);
+            conn_handle_subs[event->subscribe.conn_handle] = true;
+            return 0;
 
-        conn_handle_subs[event->disconnect.conn.conn_handle] = false;
+        case BLE_GAP_EVENT_NOTIFY_TX:
 
-        /* Connection terminated; resume advertising. */
-        ble_spp_server_advertise();
-        return 0;
+            if( user_evt_queue )
+            {
+                spp_event_t evt;
+                spp_event_send_cb_t *send_cb = &evt.data.send_cb;
+                evt.id = SPP_SEND_CB;
+                send_cb->bytes_sent = 0;
 
-    case BLE_GAP_EVENT_CONN_UPDATE:
-        /* The central has updated the connection parameters. */
-        ESP_LOGI(TAG, "connection updated; status=%d ",
-                    event->conn_update.status);
-        rc = ble_gap_conn_find(event->conn_update.conn_handle, &desc);
-        assert(rc == 0);
-        ble_spp_server_print_conn_desc(&desc);
-        ESP_LOGI(TAG, "\n");
-        return 0;
+                // Put the event into the queue for processing
+                if( xQueueSend(*user_evt_queue, &evt, 512) != pdTRUE )
+                {
+                    ESP_LOGW(TAG, "Send event failed to enqueue");
+                }
+            }
+            return 0;
 
-    case BLE_GAP_EVENT_ADV_COMPLETE:
-        ESP_LOGI(TAG, "advertise complete; reason=%d",
-                    event->adv_complete.reason);
-        ble_spp_server_advertise();
-        return 0;
-
-    case BLE_GAP_EVENT_MTU:
-        ESP_LOGI(TAG, "mtu update event; conn_handle=%d cid=%d mtu=%d\n",
-                    event->mtu.conn_handle,
-                    event->mtu.channel_id,
-                    event->mtu.value);
-        return 0;
-
-    case BLE_GAP_EVENT_SUBSCRIBE:
-        ESP_LOGI(TAG, "subscribe event; conn_handle=%d attr_handle=%d "
-                    "reason=%d prevn=%d curn=%d previ=%d curi=%d\n",
-                    event->subscribe.conn_handle,
-                    event->subscribe.attr_handle,
-                    event->subscribe.reason,
-                    event->subscribe.prev_notify,
-                    event->subscribe.cur_notify,
-                    event->subscribe.prev_indicate,
-                    event->subscribe.cur_indicate);
-        conn_handle_subs[event->subscribe.conn_handle] = true;
-        return 0;
-
-    default:
-        return 0;
+        default:
+            return 0;
     }
 }
 
