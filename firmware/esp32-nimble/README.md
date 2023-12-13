@@ -2,8 +2,6 @@
 
 Firmware and logs for ESP32 NimBLE BLE latency tests.
 
-- I ran tests with builds set to -O2 (performance) via menuconfig.
-
 IO Setup:
 
 - IO19 is driven with a 3.3V trigger pulse from my sig-gen.
@@ -24,4 +22,4 @@ Use `idf.py build` and/or `idf.py -p /dev/ttyUSB0 flash` to build and flash to h
 
 # References
 
-Espressif IDF SPP example
+Espressif IDF [NimBLE Server/Client GATT/SPP example](https://github.com/espressif/esp-idf/tree/master/examples/bluetooth/nimble/ble_spp) was a base that I needed to modify for IDF 5.1 and feature parity with other tests.

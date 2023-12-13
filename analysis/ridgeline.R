@@ -8,7 +8,7 @@ library(readr)
 library(tidyr)
 
 # Read the CSV file into a data frame
-data <- read.csv("esp32-ble-results.csv", 
+data <- read.csv("esp32-nimble-results.csv", 
                  check.names = FALSE, 
                  stringsAsFactors = FALSE)
 
@@ -24,7 +24,10 @@ data_long <- data %>%
 
 # Convert 'category' to a factor with levels defined by column order from the CSV
 data_long$category <- factor(data_long$category, levels = column_order)
-#data_long$category <- factor(data_long$category, levels = rev(column_order))
+# data_long$category <- factor(data_long$category, levels = rev(column_order))
+
+# Convert to microseconds
+# data_long$duration <- data_long$duration/1e3
 
 # Sum the number of samples to show as n=123 text
 add_sample <- function(x){
@@ -43,9 +46,9 @@ p <- data_long %>%
     normalize = "groups",
     scale = 0.75,
     height = 0.75,
-    width = .75, 
+    width = .5, 
     .width = 0,
-    justification = -.4,
+    justification = -.5,
     alpha = 0.70,
     na.rm = TRUE,
     point_color = NA 
@@ -62,7 +65,7 @@ p <- data_long %>%
   stat_summary(
     geom = "text",
     fun = "median",
-    aes(label = round(..y.., 2)),
+    aes(label = round(..y.., 1)),
     family = "Roboto Mono",
     fontface = "bold",
     size = 5,
@@ -81,17 +84,17 @@ p <- data_long %>%
   coord_flip() +
   # Override x-axis range and ticks
   scale_y_continuous(
-    limits = c(0, 70),
-    #breaks = seq(0, 1000, by = 2)
-    breaks = pretty(range(data_long$duration, na.rm = TRUE), n = 6, min.n = 4),
+    limits = c(0, 195),
+    breaks = seq(0, 1500, by = 20)
+    # breaks = pretty(range(data_long$duration, na.rm = TRUE), n = 6, min.n = 4),
     #expand = c(0.05, 1)
   ) +
   # Axis Labels
         labs(
           x = NULL,
           y = "Duration (milliseconds)",
-          title = "ESP32 BLE GATT Transfer Durations",
-          subtitle = "ESP-IDF, Bluedroid, MTU=200",
+          title = "ESP32 NimBLE GATT Transfer Durations",
+          subtitle = "ESP-IDF 5.1.1, NimBLE, MTU=200, Notify",
           caption = "Lower is better"
         ) +
         theme_minimal() +
@@ -114,5 +117,5 @@ p <- data_long %>%
 
 p
 
-save_plot("test.svg", fig = p, width=30, height=16)
+save_plot("test.svg", fig = p, width=30, height=14)
 

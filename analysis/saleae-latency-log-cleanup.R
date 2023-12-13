@@ -56,10 +56,9 @@ for (file_name in csv_files) {
             # Combine time differences
             time_diff_sec <- time_diff_s + (time_diff_ns / 1e9)
             
-            # Append to this file's Time_Diff vector
+            # Append to this file's Time_Diff vector (in milliseconds)
             time_diff_vector <- c(time_diff_vector, (time_diff_sec*1e3))
-            # At 115200 baud, 12B take 939100 nanoseconds to transfer
-            
+
             break
           }
         }
