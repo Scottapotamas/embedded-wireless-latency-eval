@@ -25,7 +25,46 @@ static const char *TAG = "SERVER";
 /* -------------------------------------------------------------------------- */
 
 static QueueHandle_t *user_evt_queue;
-static int32_t active_sock = -1;
+static int active_sock = -1;
+
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Modified from https://github.com/espressif/esp-idf/blob/master/examples/protocols/sockets/non_blocking/main/non_blocking_socket_example.c
+ * Non-blocking read,
+ *
+ * @param[in] tag Logging tag
+ * @param[in] sock Socket for reception
+ * @param[out] data Data pointer to write the received data
+ * @param[in] max_len Maximum size of the allocated space for receiving data
+ * @return
+ *          >0 : Size of received data
+ *          =0 : No data available
+ *          -1 : Error occurred during socket read operation
+ *          -2 : Socket is not connected, to distinguish between an actual socket error and active disconnection
+ */
+static int try_receive(const int sock, char * data, size_t max_len)
+{
+    int len = recv(sock, data, max_len, 0);
+    if (len < 0) 
+    {
+        if (errno == EINPROGRESS || errno == EAGAIN || errno == EWOULDBLOCK) 
+        {
+            return 0;   // Not an error
+        }
+
+        if (errno == ENOTCONN) 
+        {
+            ESP_LOGW(TAG, "[sock=%d]: Connection closed", sock);
+            return -2;  // Socket has been disconnected
+        }
+
+        ESP_LOGW(TAG, "[sock=%d]: Rx Error", sock);
+        return -1;
+    }
+
+    return len;
+}
 
 /* -------------------------------------------------------------------------- */
 
@@ -39,6 +78,8 @@ void tcp_server_task(void *pvParameters)
     int keepInterval = KEEPALIVE_INTERVAL;
     int keepCount = KEEPALIVE_COUNT;
     struct sockaddr_storage dest_addr;
+    
+    active_sock = -128;
 
     // ipv4
     struct sockaddr_in *dest_addr_ip4 = (struct sockaddr_in *)&dest_addr;
@@ -57,8 +98,16 @@ void tcp_server_task(void *pvParameters)
 
     int opt = 1;
     setsockopt(listen_sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-
     ESP_LOGI(TAG, "Socket created");
+
+    // Marking the socket as non-blocking
+    int flags = fcntl(listen_sock, F_GETFL);
+    if( fcntl(listen_sock, F_SETFL, flags | O_NONBLOCK) == -1 )
+    {
+        ESP_LOGE(TAG, "Unable to set socket non blocking: errno %d", errno);
+        goto CLEAN_UP;
+    }
+    ESP_LOGI(TAG, "Socket marked as non blocking");
 
     int err = bind(listen_sock, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
     if (err != 0)
@@ -77,116 +126,109 @@ void tcp_server_task(void *pvParameters)
     }
 
     // Inbound temp buffer
-    int len;
     char rx_buffer[128];
 
     while (1) 
     {
-        ESP_LOGI(TAG, "Socket listening");
-
-        struct sockaddr_storage source_addr;
-        socklen_t addr_len = sizeof(source_addr);
-        int sock = accept(listen_sock, (struct sockaddr *)&source_addr, &addr_len);
-        
-        if (sock < 0) 
+        if( active_sock < 0 )
         {
-            ESP_LOGE(TAG, "Unable to accept connection: errno %d", errno);
-            break;
-        }
-
-        // Set tcp keepalive option
-        setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, &keepAlive, sizeof(int));
-        setsockopt(sock, IPPROTO_TCP, TCP_KEEPIDLE, &keepIdle, sizeof(int));
-        setsockopt(sock, IPPROTO_TCP, TCP_KEEPINTVL, &keepInterval, sizeof(int));
-        setsockopt(sock, IPPROTO_TCP, TCP_KEEPCNT, &keepCount, sizeof(int));
-
-        // Convert ip address to string
-        if (source_addr.ss_family == PF_INET)
-        {
-            inet_ntoa_r(((struct sockaddr_in *)&source_addr)->sin_addr, addr_str, sizeof(addr_str) - 1);
-        }
-
-        ESP_LOGI(TAG, "Socket accepted ip address: %s", addr_str);
-
-        active_sock = sock;
-
-
-        struct timeval timeout;
-        timeout.tv_sec = 1;
-        timeout.tv_usec = 0;
-
-        fd_set readfds;
-        int retval;
-
-        // Wait for inbound data
-        while( 1 )
-        {
-            FD_ZERO(&readfds);
-            FD_SET(sock, &readfds);
-
-            retval = select(sock + 1, &readfds, NULL, NULL, &timeout);
-
-            if( retval == -1 ) 
+            struct sockaddr_storage source_addr;
+            socklen_t addr_len = sizeof(source_addr);
+            int sock = accept(listen_sock, (struct sockaddr *)&source_addr, &addr_len);
+            
+            if( sock < 0 )
             {
-                ESP_LOGE(TAG, "select() error: errno %d", errno);
-                break;
+                if( errno == EWOULDBLOCK ) 
+                {
+                    // The listener socket did not accepts any connection
+                    // continue to serve open connections and try to accept again upon the next iteration
+                    ESP_LOGV(TAG, "No pending connections...");
+                }
+                else 
+                {
+                    ESP_LOGI(TAG, "[sock=%d]: Error when accepting connection %d", sock, errno);
+                    goto CLEAN_UP;
+                }
+            }
+            else 
+            {
+                // Client connected
+
+                // Convert ip address to string
+                if (source_addr.ss_family == PF_INET)
+                {
+                    inet_ntoa_r(((struct sockaddr_in *)&source_addr)->sin_addr, addr_str, sizeof(addr_str) - 1);
+                }
+
+                ESP_LOGI(TAG, "Socket accepted ip address: %s", addr_str);
+
+                // Set the client's socket to be non-blocking
+                flags = fcntl(sock, F_GETFL);
+
+                if( fcntl(sock, F_SETFL, flags | O_NONBLOCK) == -1 ) 
+                {
+                    ESP_LOGE(TAG, "Unable to set socket non blocking: errno %d", errno);
+                    goto CLEAN_UP;
+                }
+                ESP_LOGI(TAG, "[sock=%d]: Socket marked as non blocking", sock);
+
+                // Set tcp keepalive option
+                setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, &keepAlive, sizeof(int));
+                setsockopt(sock, IPPROTO_TCP, TCP_KEEPIDLE, &keepIdle, sizeof(int));
+                setsockopt(sock, IPPROTO_TCP, TCP_KEEPINTVL, &keepInterval, sizeof(int));
+                setsockopt(sock, IPPROTO_TCP, TCP_KEEPCNT, &keepCount, sizeof(int));
+
+                active_sock = sock;
+            }
+
+        }
+
+        if( active_sock >= 0 )
+        {
+            // This is an open socket -> try to serve it
+            int len = try_receive(active_sock, rx_buffer, sizeof(rx_buffer));
+
+            if( len < 0 ) 
+            {
+                // Error occurred within this client's socket -> close and mark invalid
+                ESP_LOGI(TAG, "[sock=%d]: try_receive() returned %d -> closing the socket", active_sock, len);
+                close(active_sock);
+                active_sock = -1;
             } 
-            else if( retval ) 
+            else if( len > 0 ) 
             {
-                // len = recv(sock, rx_buffer, sizeof(rx_buffer) - 1, 0);
-                len = read(sock, rx_buffer, sizeof(rx_buffer)-1);
+                ESP_LOGI(TAG, "Received %d bytes: %s", len, rx_buffer);
 
-                if (len < 0)
+                // Post an event to the user-space event queue with the inbound data
+                if( user_evt_queue && len)
                 {
-                    ESP_LOGE(TAG, "Error occurred during receiving: errno %d", errno);
-                    break;
-                }
-                else if (len == 0)
-                {
-                    ESP_LOGW(TAG, "Connection closed");
-                    break;
-                }
-                else
-                {
-                    ESP_LOGI(TAG, "Received %d bytes: %s", len, rx_buffer);
+                    bench_event_t evt;
+                    bench_event_recv_cb_t *recv_cb = &evt.data.recv_cb;
+                    evt.id = BENCH_RECV_CB;
 
-                    // Post an event to the user-space event queue with the inbound data
-                    if( user_evt_queue && len)
+                    // Allocate a sufficiently large chunk of memory and copy the payload into it
+                    // User task is responsible for freeing this memory
+                    recv_cb->data = malloc( len );
+                    if( recv_cb->data == NULL )
                     {
-                        bench_event_t evt;
-                        bench_event_recv_cb_t *recv_cb = &evt.data.recv_cb;
-                        evt.id = BENCH_RECV_CB;
+                        ESP_LOGE(TAG, "RX Malloc fail");
+                        return;
+                    }
 
-                        // Allocate a sufficiently large chunk of memory and copy the payload into it
-                        // User task is responsible for freeing this memory
-                        recv_cb->data = malloc( len );
-                        if( recv_cb->data == NULL )
-                        {
-                            ESP_LOGE(TAG, "RX Malloc fail");
-                            return;
-                        }
+                    memcpy(recv_cb->data, rx_buffer, len);
+                    recv_cb->data_len = len;
 
-                        memcpy(recv_cb->data, rx_buffer, len);
-                        recv_cb->data_len = len;
-
-                        // Put the event into the queue for processing
-                        if( xQueueSend(*user_evt_queue, &evt, 512) != pdTRUE )
-                        {
-                            ESP_LOGW(TAG, "RX event failed to enqueue");
-                            free(recv_cb->data);
-                        }
+                    // Put the event into the queue for processing
+                    if( xQueueSend(user_evt_queue, &evt, 512) != pdTRUE )
+                    {
+                        ESP_LOGW(TAG, "RX event failed to enqueue");
+                        free(recv_cb->data);
                     }
                 }
             }
-
-            vTaskDelay(1 / portTICK_PERIOD_MS);
         }
 
-        ESP_LOGW(TAG, "Shutdown sock");
-
-        active_sock = -1;
-        shutdown(sock, 0);
-        close(sock);
+        vTaskDelay(pdMS_TO_TICKS(1));
     }
 
 CLEAN_UP:

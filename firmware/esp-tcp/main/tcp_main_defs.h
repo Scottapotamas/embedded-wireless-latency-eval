@@ -35,7 +35,7 @@ typedef struct {
 
 #define BENCHMARK_QUEUE_SIZE (8)
 
-#define BENCH_DATA_MAX_LEN (255)
+#define BENCH_DATA_MAX_LEN (2048)
 
 /* -------------------------------------------------------------------------- */
 

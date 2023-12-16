@@ -26,13 +26,52 @@ static int32_t active_sock = -1;
 
 /* -------------------------------------------------------------------------- */
 
+/**
+ * Modified from https://github.com/espressif/esp-idf/blob/master/examples/protocols/sockets/non_blocking/main/non_blocking_socket_example.c
+ * Non-blocking read,
+ *
+ * @param[in] tag Logging tag
+ * @param[in] sock Socket for reception
+ * @param[out] data Data pointer to write the received data
+ * @param[in] max_len Maximum size of the allocated space for receiving data
+ * @return
+ *          >0 : Size of received data
+ *          =0 : No data available
+ *          -1 : Error occurred during socket read operation
+ *          -2 : Socket is not connected, to distinguish between an actual socket error and active disconnection
+ */
+static int try_receive(const int sock, char * data, size_t max_len)
+{
+    int len = recv(sock, data, max_len, 0);
+    if (len < 0) 
+    {
+        if (errno == EINPROGRESS || errno == EAGAIN || errno == EWOULDBLOCK) 
+        {
+            return 0;   // Not an error
+        }
+
+        if (errno == ENOTCONN) 
+        {
+            ESP_LOGW(TAG, "[sock=%d]: Connection closed", sock);
+            return -2;  // Socket has been disconnected
+        }
+
+        ESP_LOGW(TAG, "[sock=%d]: Rx Error", sock);
+        return -1;
+    }
+
+    return len;
+}
+
+/* -------------------------------------------------------------------------- */
+
 void tcp_client_task(void *pvParameters)
 {
     char host_ip[] = HOST_IP_ADDR;
     int addr_family = 0;
     int ip_protocol = 0;
 
-    char rx_buffer[128] = { 0 };
+    char rx_buffer[2048] = { 0 };
     int len = 0;
 
     while (1)
@@ -51,103 +90,113 @@ void tcp_client_task(void *pvParameters)
             break;
         }
 
+        // Mark the socket as non-blocking
+        int flags = fcntl(sock, F_GETFL);
+        if( fcntl(sock, F_SETFL, flags | O_NONBLOCK) == -1 )
+        {
+            ESP_LOGW(TAG, "Unable to set socket %d non blocking %i", sock, errno);
+        }
+
         ESP_LOGI(TAG, "Socket created, connecting to %s:%d", host_ip, PORT);
 
-        int err = connect(sock, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
-        if (err != 0)
+        if( connect(sock, (struct sockaddr *)&dest_addr, sizeof(dest_addr)) != 0 )
         {
-            ESP_LOGE(TAG, "Socket unable to connect: errno %d", errno);
-            break;
+            if (errno == EINPROGRESS) 
+            {
+                ESP_LOGD(TAG, "connection in progress");
+
+                fd_set fdset;
+                FD_ZERO(&fdset);
+                FD_SET(sock, &fdset);
+
+                // Wait until the connecting socket is marked as writable, i.e. connection completes
+                int res = select( sock+1, NULL, &fdset, NULL, NULL );
+                
+                if (res < 0)
+                {
+                    ESP_LOGE(TAG, "Error during connection: select for socket to be writable: errno %d", errno);
+                    goto CLEAN_UP;
+                }
+                else if (res == 0)
+                {
+                    ESP_LOGE(TAG, "Connection timeout: select for socket to be writable: errno %d", errno);
+                    goto CLEAN_UP;
+                }
+                else
+                {
+                    int sockerr;
+                    socklen_t socklen = (socklen_t)sizeof(int);
+
+                    if( getsockopt(sock, SOL_SOCKET, SO_ERROR, (void*)(&sockerr), &socklen) < 0 ) 
+                    {
+                        ESP_LOGE(TAG, "Error getting socket using getsockopt(): errno %d", errno);
+                        goto CLEAN_UP;
+                    }
+
+                    if( sockerr )
+                    {
+                        ESP_LOGE(TAG, "Connection error: errno %d", errno);
+                        goto CLEAN_UP;
+                    }
+                }
+            } 
+            else 
+            {
+                ESP_LOGE(TAG, "Socket unable to connect: errno %d", errno);
+                break;
+            }
         }
+
         ESP_LOGI(TAG, "Successfully connected");
         active_sock = sock;
 
-        // Set timeout
-        struct timeval timeout;
-        timeout.tv_sec = 0;
-        timeout.tv_usec = 500;
-        // setsockopt (sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof timeout);
-
-        fd_set readfds;
-        int retval;
-
         while(1)
         {
-            FD_ZERO(&readfds);
-            FD_SET(sock, &readfds);
+            len = try_receive( sock, rx_buffer, sizeof(rx_buffer) );
 
-            retval = select(sock + 1, &readfds, NULL, NULL, &timeout);
-
-            if( retval == -1 ) 
+            if( len < 0 )
             {
-                ESP_LOGE(TAG, "select() error: errno %d", errno);
+                ESP_LOGE(TAG, "Error occurred during receiving: errno %d", errno);
                 break;
-            } 
-            else if( retval ) 
+            }
+            else if( len > 0 ) 
             {
-                len = recv(sock, rx_buffer, sizeof(rx_buffer) - 1, 0);
-                // len = recv(sock, rx_buffer, sizeof(rx_buffer)-1);
+                // Data received
+                // ESP_LOGI(TAG, "Received %d bytes from %s", len, host_ip);
 
-    if (len < 0) {
-        
-        log_socket_error(tag, sock, errno, "Error occurred during receiving");
-        return -1;
-    }
-
-    if (errno == EINPROGRESS || errno == EAGAIN || errno == EWOULDBLOCK) {
-            return 0;   // Not an error
-        }
-        if (errno == ENOTCONN) {
-            ESP_LOGW(tag, "[sock=%d]: Connection closed", sock);
-            return -2;  // Socket has been disconnected
-        }
-
-                if( len < 0 )
+                // Post an event to the user-space event queue with the inbound data
+                if( user_evt_queue )
                 {
-                    ESP_LOGE(TAG, "Error occurred during receiving: errno %d", errno);
-                    break;
-                }
-                else 
+                    bench_event_t evt;
+                    bench_event_recv_cb_t *recv_cb = &evt.data.recv_cb;
+                    evt.id = BENCH_RECV_CB;
 
-                else if( len > 0 ) 
-                {
-                    // Data received
-                    ESP_LOGI(TAG, "Received %d bytes from %s", len, host_ip);
-
-                    // Post an event to the user-space event queue with the inbound data
-                    if( user_evt_queue && len)
+                    // Allocate a sufficiently large chunk of memory and copy the payload into it
+                    // User task is responsible for freeing this memory
+                    recv_cb->data = malloc( len );
+                    if( recv_cb->data == NULL )
                     {
-                        bench_event_t evt;
-                        bench_event_recv_cb_t *recv_cb = &evt.data.recv_cb;
-                        evt.id = BENCH_RECV_CB;
+                        ESP_LOGE(TAG, "RX Malloc fail");
+                        return;
+                    }
 
-                        // Allocate a sufficiently large chunk of memory and copy the payload into it
-                        // User task is responsible for freeing this memory
-                        recv_cb->data = malloc( len );
-                        if( recv_cb->data == NULL )
-                        {
-                            ESP_LOGE(TAG, "RX Malloc fail");
-                            return;
-                        }
+                    memcpy(recv_cb->data, rx_buffer, len);
+                    recv_cb->data_len = len;
 
-                        ESP_LOGI(TAG, " copy");
-                        memcpy(recv_cb->data, rx_buffer, len);
-                        recv_cb->data_len = len;
-
-                        // Put the event into the queue for processing
-                        if( xQueueSend(*user_evt_queue, &evt, 128) != pdTRUE )
-                        {
-                            ESP_LOGW(TAG, "RX event failed to enqueue");
-                            free(recv_cb->data);
-                        }
-                        ESP_LOGI(TAG, " sent");
+                    // Put the event into the queue for processing
+                    if( xQueueSend(user_evt_queue, &evt, 512) != pdTRUE )
+                    {
+                        ESP_LOGW(TAG, "RX event failed to enqueue");
+                        free(recv_cb->data);
                     }
                 }
-            }   // end select retval
-
-            vTaskDelay(1 / portTICK_PERIOD_MS);
+            }
+            
+            // TODO: Work out a more suitable yield/delay here?
+            vTaskDelay(pdMS_TO_TICKS(1));
         }
 
+CLEAN_UP:
         if (sock != -1)
         {
             ESP_LOGE(TAG, "Shutting down socket and restarting...");

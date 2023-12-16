@@ -48,7 +48,7 @@
 
 /* -------------------------------------------------------------------------- */
 
-static const char *TAG = "espble";
+static const char *TAG = "tcp";
 
 static QueueHandle_t bench_evt_queue;
 
@@ -346,7 +346,7 @@ static void benchmark_task(void *pvParameter)
                 bytes_to_send = BENCH_DATA_MAX_LEN;
             }
             
-            ESP_LOGI(TAG, "Trig. Sending %iB", bytes_to_send );
+            // ESP_LOGI(TAG, "Trig. Sending %iB", bytes_to_send );
 
 #if TCP_MODE == SERVER
             tcp_server_send_payload( &test_payload[bytes_sent], bytes_to_send );
@@ -383,7 +383,7 @@ static void benchmark_task(void *pvParameter)
                             bytes_to_send = BENCH_DATA_MAX_LEN;
                         }
 
-                        ESP_LOGI(TAG, "Cont. Sending %iB", bytes_to_send );
+                        // ESP_LOGI(TAG, "Cont. Sending %iB", bytes_to_send );
 
 #if TCP_MODE == SERVER
                         tcp_server_send_payload( &test_payload[bytes_sent], bytes_to_send );
@@ -396,7 +396,7 @@ static void benchmark_task(void *pvParameter)
                     {
                         bytes_sent = 0;
                         bytes_pending = 0;
-                        ESP_LOGI(TAG, "FIN \n");
+                        // ESP_LOGI(TAG, "FIN \n");
                     }
   
                     break;
@@ -407,7 +407,7 @@ static void benchmark_task(void *pvParameter)
                     // Destructure the callback into something more ergonomic
                     bench_event_recv_cb_t *recv_cb = &evt.data.recv_cb;
 
-                    ESP_LOGI(TAG, "Got %"PRIu32"B", recv_cb->data_len);
+                    // ESP_LOGI(TAG, "Got %"PRIu32"B", recv_cb->data_len);
 
                     for( uint16_t i = 0; i < recv_cb->data_len; i++ )
                     {
@@ -416,7 +416,7 @@ static void benchmark_task(void *pvParameter)
                         {
                             bytes_read = 0;
                             working_crc = CRC_SEED;
-                            ESP_LOGI(TAG, "RESET\n");
+                            // ESP_LOGI(TAG, "RESET\n");
                         }
 
                         // Running crc and byte count
@@ -428,7 +428,7 @@ static void benchmark_task(void *pvParameter)
                         {
                             // Valid test structure
                             gpio_set_level( GPIO_OUTPUT_IO_0, 1 );
-                            ESP_LOGI(TAG, "GOOD \n");
+                            // ESP_LOGI(TAG, "GOOD \n");
                         }
                     }
 
