@@ -275,6 +275,7 @@ void setup_wifi( void )
      */
     ESP_ERROR_CHECK( example_connect() );
 
+    esp_wifi_set_ps(WIFI_PS_NONE);
 }
 
 /* -------------------------------------------------------------------------- */

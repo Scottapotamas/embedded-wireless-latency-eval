@@ -43,6 +43,7 @@ typedef struct {
 #define KEEPALIVE_IDLE              (5)
 #define KEEPALIVE_INTERVAL          (5)
 #define KEEPALIVE_COUNT             (3)
+#define NODELAY_CONFIG              (1) // disables Nagle's Algorithm
 
 /* -------------------------------------------------------------------------- */
 

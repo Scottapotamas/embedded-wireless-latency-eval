@@ -77,6 +77,7 @@ void tcp_server_task(void *pvParameters)
     int keepIdle = KEEPALIVE_IDLE;
     int keepInterval = KEEPALIVE_INTERVAL;
     int keepCount = KEEPALIVE_COUNT;
+    int noDelay = NODELAY_CONFIG;
     struct sockaddr_storage dest_addr;
     
     active_sock = -128;
@@ -177,6 +178,7 @@ void tcp_server_task(void *pvParameters)
                 setsockopt(sock, IPPROTO_TCP, TCP_KEEPIDLE, &keepIdle, sizeof(int));
                 setsockopt(sock, IPPROTO_TCP, TCP_KEEPINTVL, &keepInterval, sizeof(int));
                 setsockopt(sock, IPPROTO_TCP, TCP_KEEPCNT, &keepCount, sizeof(int));
+                setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &noDelay, sizeof(int));
 
                 active_sock = sock;
             }
