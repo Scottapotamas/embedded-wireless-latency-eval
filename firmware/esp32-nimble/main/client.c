@@ -198,6 +198,22 @@ static void ble_spp_client_on_disc_complete(const struct peer *peer, int status,
 
     ble_gattc_exchange_mtu(peer->conn_handle, NULL, NULL);
 
+    // Sets the client's BLE connection behaviours 
+    // https://mynewt.apache.org/latest/network/ble_hs/ble_gap.html#c.ble_gap_update_params
+    // ITVL uses 1.25 ms units
+    // Timout is in 10ms units
+    // CE LEN uses 0.625 ms units
+    // BLE specifies minimum 7.5ms connection interval
+    struct ble_gap_upd_params conn_parameters = { 0 };
+    conn_parameters.itvl_min = 6;   // 7.5ms
+    conn_parameters.itvl_max = 24;  // 30ms
+    conn_parameters.latency = 0;
+    conn_parameters.supervision_timeout = 20; 
+    // https://github.com/apache/mynewt-nimble/issues/793#issuecomment-616022898
+    conn_parameters.min_ce_len = 0x00;
+    conn_parameters.max_ce_len = 0x00;
+
+    ble_gap_update_params(peer->conn_handle, &conn_parameters);
     // ble_spp_client_scan();
 }
 
