@@ -56,7 +56,7 @@ static const char *TAG = "espble";
 #define SPP_QUEUE_SIZE (8)
 static QueueHandle_t spp_evt_queue;
 
-#define SPP_DATA_MAX_LEN (197)
+#define SPP_DATA_MAX_LEN (193)
 
 /* -------------------------------------------------------------------------- */
 
@@ -273,7 +273,7 @@ static void crc16(uint8_t data, uint16_t *crc)
 void app_main(void)
 {
     // Initialize NVS
-    nvs_flash_erase();
+    // nvs_flash_erase();
     esp_err_t ret = nvs_flash_init();
 
 

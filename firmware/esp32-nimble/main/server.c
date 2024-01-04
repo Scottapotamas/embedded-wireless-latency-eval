@@ -37,6 +37,11 @@ void ble_store_config_init(void);
 
 /* -------------------------------------------------------------------------- */
 
+#define LL_PACKET_TIME (2120)
+#define LL_PACKET_LENGTH (200)
+#define MTU_DESIRED (200)
+
+
 /* 16 Bit SPP Service UUID */
 #define BLE_SVC_SPP_UUID16                                  0xABF0
 
@@ -239,6 +244,11 @@ static int ble_spp_server_gap_event(struct ble_gap_event *event, void *arg)
                 rc = ble_gap_conn_find(event->connect.conn_handle, &desc);
                 assert(rc == 0);
                 ble_spp_server_print_conn_desc(&desc);
+
+                ble_hs_hci_util_set_data_len( event->connect.conn_handle,
+                              LL_PACKET_LENGTH,
+                              LL_PACKET_TIME );
+
             }
 
             if( event->connect.status != 0 || CONFIG_BT_NIMBLE_MAX_CONNECTIONS > 1 )
@@ -513,7 +523,7 @@ void ble_server_setup( void )
     rc = ble_svc_gap_device_name_set("nimble-ble-spp-svr");
     assert(rc == 0);
 
-    ble_att_set_preferred_mtu(200);
+    ble_att_set_preferred_mtu(MTU_DESIRED);
 
     // ble_store_config_init();
 

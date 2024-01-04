@@ -42,6 +42,11 @@ union ble_store_key;
 /* 16 Bit SPP Service Characteristic UUID */
 #define GATT_SPP_CHR_UUID                                  0xABF1
 
+
+#define LL_PACKET_TIME (2120)
+#define LL_PACKET_LENGTH (200)
+#define MTU_DESIRED (200)
+
 /* -------------------------------------------------------------------------- */
 
 static void ble_spp_client_set_handle(const struct peer *peer);
@@ -195,6 +200,10 @@ static void ble_spp_client_on_disc_complete(const struct peer *peer, int status,
 
     ble_spp_client_set_handle(peer);
     ble_spp_client_subscribe_spp(peer);
+
+    ble_hs_hci_util_set_data_len( peer->conn_handle,
+                                  LL_PACKET_LENGTH,
+                                  LL_PACKET_TIME );
 
     ble_gattc_exchange_mtu(peer->conn_handle, NULL, NULL);
 
