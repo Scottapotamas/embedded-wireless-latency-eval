@@ -245,9 +245,11 @@ static int ble_spp_server_gap_event(struct ble_gap_event *event, void *arg)
                 assert(rc == 0);
                 ble_spp_server_print_conn_desc(&desc);
 
-                ble_hs_hci_util_set_data_len( event->connect.conn_handle,
-                              LL_PACKET_LENGTH,
-                              LL_PACKET_TIME );
+                ble_gap_set_data_len(event->connect.conn_handle, LL_PACKET_LENGTH, LL_PACKET_TIME);
+
+                // ble_hs_hci_util_set_data_len( event->connect.conn_handle,
+                //               LL_PACKET_LENGTH,
+                //               LL_PACKET_TIME );
 
             }
 

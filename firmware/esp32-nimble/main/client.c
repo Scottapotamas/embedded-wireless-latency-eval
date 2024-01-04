@@ -201,9 +201,11 @@ static void ble_spp_client_on_disc_complete(const struct peer *peer, int status,
     ble_spp_client_set_handle(peer);
     ble_spp_client_subscribe_spp(peer);
 
-    ble_hs_hci_util_set_data_len( peer->conn_handle,
-                                  LL_PACKET_LENGTH,
-                                  LL_PACKET_TIME );
+    ble_gap_set_data_len( peer->conn_handle, LL_PACKET_LENGTH, LL_PACKET_TIME );
+
+    // ble_hs_hci_util_set_data_len( peer->conn_handle,
+    //                               LL_PACKET_LENGTH,
+    //                               LL_PACKET_TIME );
 
     ble_gattc_exchange_mtu(peer->conn_handle, NULL, NULL);
 
