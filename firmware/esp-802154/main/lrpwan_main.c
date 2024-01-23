@@ -417,7 +417,7 @@ void esp_ieee802154_transmit_done(  const uint8_t *frame,
     evt.id = RADIO_SEND_CB;
     radio_send_cb_t *send_cb = &evt.info.send_cb;
 
-    send_cb->ack_bytes = ack[0];
+    // send_cb->ack_bytes = ack[0];
     send_cb->frame_bytes = frame[0];
 
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
@@ -445,12 +445,15 @@ static void transmit_packet( uint8_t *buffer, uint16_t length )
     // Header fields
     // Frame Control Field: 0x8861 
     // Frame Type: Data
-    // Acknowledge Request,
+    // Acknowledge Request
     // PAN ID Compression 
     // Destination Addressing Mode: Short/16-bit 
     // Frame Version: IEEE Std 802.15.4-2003 
     // Source Addressing Mode: Short/16-bit
-    meta.mac_header       = 0x8861;    
+    //meta.mac_header       = 0x8861;    
+
+    // Same as above, but don't require ACK
+    meta.mac_header       = 0x8841;    
 
     meta.seq_num          = seq_num++;
     meta.pan_destination  = 0x0007; // just a random PAN
