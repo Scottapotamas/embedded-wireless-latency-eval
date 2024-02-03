@@ -77,16 +77,10 @@ static void websocket_event_handler(void *handler_args,
             // ESP_LOGI(TAG, "WEBSOCKET_EVENT_DATA");
             // ESP_LOGI(TAG, "Received opcode=%d", data->op_code);
 
-            // Text data
-            if( data->op_code == 0x01 && data->data_len )
-            {
-                ESP_LOGI(TAG, "Received=%.*s", data->data_len, (char *)data->data_ptr);
-            }
-
             // Binary data inbound
             if( data->op_code == 0x02 && data->data_len )
             {
-                 // Post an event to the user-space event queue with the inbound data
+                // Post an event to the user-space event queue with the inbound data
                 if( user_evt_queue )
                 {
                     bench_event_t evt;
@@ -113,6 +107,12 @@ static void websocket_event_handler(void *handler_args,
                     }
                 }
 
+            }
+
+            // Text data
+            if( data->op_code == 0x01 && data->data_len )
+            {
+                ESP_LOGI(TAG, "Received=%.*s", data->data_len, (char *)data->data_ptr);
             }
            
             // ESP_LOGW(TAG, "Total payload length=%d, data_len=%d, current payload offset=%d\r\n", data->payload_len, data->data_len, data->payload_offset);
@@ -151,7 +151,10 @@ void websocket_client_task(void *pvParameters)
     while(1)
     {
         client = esp_websocket_client_init( &websocket_cfg );
-        esp_websocket_register_events( client, WEBSOCKET_EVENT_ANY, websocket_event_handler, (void *)client );
+        esp_websocket_register_events(  client, 
+                                        WEBSOCKET_EVENT_ANY, 
+                                        websocket_event_handler, 
+                                        (void *)client );
 
         esp_websocket_client_start(client);
         xTimerStart(shutdown_signal_timer, portMAX_DELAY);

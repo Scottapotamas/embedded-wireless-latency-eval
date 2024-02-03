@@ -14,6 +14,11 @@
 #include "esp_eth.h"
 #include "protocol_examples_common.h"
 
+#include "lwip/err.h"
+#include "lwip/sockets.h"
+#include "lwip/sys.h"
+#include <lwip/netdb.h>
+
 #include <esp_http_server.h>
 
 #include "websocket_server.h"
@@ -65,9 +70,17 @@ static esp_err_t ws_server_handler(httpd_req_t *req)
 {
     if (req->method == HTTP_GET)
     {
-        ESP_LOGI(TAG, "WS Handshake done!");
+        ESP_LOGI(TAG, "WS Handshake done!");    
+
+        // Slightly cursed approach to modify underlying TCP socket?
+        int cur_sock_session_id = httpd_req_to_sockfd(req);
+        // Disable Nagles Algo
+        int noDelay = 1; 
+        setsockopt(cur_sock_session_id, IPPROTO_TCP, TCP_NODELAY, &noDelay, sizeof(int));
+
         return ESP_OK;
     }
+
 
     httpd_ws_frame_t ws_pkt;
     memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
@@ -192,15 +205,14 @@ void websocket_server_task(void *pvParameters)
 
     server = start_webserver();
 
-    // Inbound temp buffer
-    char rx_buffer[128];
-
     vTaskDelete(NULL);
 }
 
 /* -------------------------------------------------------------------------- */
 
 static int client_fds[CONFIG_LWIP_MAX_LISTENING_TCP] = { 0 };
+static int client_cached = 0;
+httpd_ws_frame_t ws_pkt;
 
 void websocket_server_send_payload( uint8_t *data, uint32_t length )
 {
@@ -217,13 +229,12 @@ void websocket_server_send_payload( uint8_t *data, uint32_t length )
         if( ret == ESP_OK )
         {
             // Walk through the list, finding websockets clients
-            for( int i = 0; i < fds; i++ ) 
+            for( int i = client_cached; i < fds; i++ ) 
             {
                 httpd_ws_client_info_t client_info = httpd_ws_get_fd_info(server, client_fds[i]);
                 if( client_info == HTTPD_WS_CLIENT_WEBSOCKET )
                 {
                     // Form a websockets packet
-                    httpd_ws_frame_t ws_pkt;
                     memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
 
                     ws_pkt.type = HTTPD_WS_TYPE_BINARY;
@@ -232,7 +243,12 @@ void websocket_server_send_payload( uint8_t *data, uint32_t length )
 
                     // Send it!
                     ret = httpd_ws_send_data( server, client_fds[i], &ws_pkt );
+                    client_cached = i;
                     return;
+                }
+                else
+                {
+                    client_cached = 0;
                 }
             }
         }
