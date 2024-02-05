@@ -1,0 +1,12 @@
+{
+    "files.associations": {
+        "array": "c",
+        "string": "c",
+        "string_view": "c",
+        "uart.h": "c",
+        "central.h": "c",
+        "benchmark_defs.h": "c",
+        "peripheral.h": "c",
+        "nus.h": "c"
+    }
+}
