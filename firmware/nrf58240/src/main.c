@@ -76,22 +76,22 @@ static void configure_gpio(void)
 	int ret;
 
 	if (!device_is_ready(led.port)) {
-		LOG_INF("Output IO not ready");
+		printk("Output IO not ready");
 	}
 
 	if (!device_is_ready(button.port)) {
-		LOG_INF("Input IO not ready");
+		printk("Input IO not ready");
 	}
 
 	ret = gpio_pin_configure_dt(&led, GPIO_OUTPUT_ACTIVE);
 	if (ret < 0) {
-		LOG_INF("Failed to configure Output IO");
+		printk("Failed to configure Output IO");
 	}
 
 	ret = gpio_pin_configure_dt(&button, GPIO_INPUT);
 	if (ret < 0)
 	{
-		LOG_INF("Failed to configure input IO");
+		printk("Failed to configure input IO");
 	}
 	ret = gpio_pin_interrupt_configure_dt(&button, GPIO_INT_EDGE_TO_ACTIVE );
 
@@ -111,6 +111,8 @@ static void crc16(uint8_t data, uint16_t *crc)
 int main(void)
 {
     k_msgq_init(&bench_evt_queue, bench_evt_buffer, sizeof(bench_event_t), BENCHMARK_QUEUE_SIZE);
+
+    printk("BLE Latency Benchmark\n");
 
 	configure_gpio();
 
@@ -137,6 +139,8 @@ int main(void)
     uint16_t bytes_sent = 0;
     int msgq_res = 0;
 
+    printk("Starting...\n");
+
 	for (;;) {
 
  		if( trigger_pending )
@@ -150,7 +154,7 @@ int main(void)
                 bytes_to_send = BENCH_DATA_MAX_LEN;
             }
             
-            LOG_INF( "Trig. Sending %iB", bytes_to_send );
+            // printk( "Trig. Sending %iB\n", bytes_to_send );
 
 #if BLE_MODE == SERVER
             central_send_payload( &test_payload[bytes_sent], bytes_to_send );
@@ -161,11 +165,11 @@ int main(void)
             trigger_pending = false;
         }
 
-        msgq_res = k_msgq_get( &bench_evt_queue, &evt, K_NO_WAIT );
+        msgq_res = k_msgq_get( &bench_evt_queue, &evt, K_MSEC(1) ); //K_NO_WAIT
 
 		if( msgq_res == 0 )
 		{
-            // LOG_INF( "EVT[%i]", evt.id);
+            // printk( "EVT[%i]\n", evt.id);
 
 			switch( evt.id )
             {
@@ -174,7 +178,7 @@ int main(void)
                 {
                     // bench_event_send_cb_t *send_cb = &evt.data.send_cb;
 
-                    // LOG_INF( "At %i, Wrote %iB", bytes_sent, send_cb->bytes_sent);
+                    // printk( "Partial done %i, %i\n", bytes_sent, bytes_pending);
 
                     // Update index of sent data (for multi-packet transfers)
                     bytes_sent += bytes_pending;
@@ -189,7 +193,7 @@ int main(void)
                             bytes_to_send = BENCH_DATA_MAX_LEN;
                         }
 
-                        LOG_INF( "Cont. Sending %iB", bytes_to_send );
+                        // printk( "Cont. Sending %iB\n", bytes_to_send );
 
 #if BLE_MODE == SERVER
                         central_send_payload( &test_payload[bytes_sent], bytes_to_send );
@@ -203,7 +207,7 @@ int main(void)
                     {
                         bytes_sent = 0;
                         bytes_pending = 0;
-                        // LOG_INF( "FIN \n");
+                        // printk( "FIN \n");
                     }
   
                     break;
@@ -214,7 +218,7 @@ int main(void)
                     // Destructure the callback into something more ergonomic
                     bench_event_recv_cb_t *recv_cb = &evt.data.recv_cb;
 
-                    LOG_INF( "Got %iB", recv_cb->data_len);
+                    // printk( "Got %iB\n", recv_cb->data_len);
 
                     for( uint16_t i = 0; i < recv_cb->data_len; i++ )
                     {
@@ -223,7 +227,7 @@ int main(void)
                         {
                             bytes_read = 0;
                             working_crc = CRC_SEED;
-                            LOG_INF( "RESET\n");
+                            // printk( "RESET\n");
                         }
 
                         // Running crc and byte count
@@ -248,7 +252,7 @@ int main(void)
                 }   // end rx callback handling
 
                 default:
-                    LOG_INF( "Invalid callback type: %d", evt.id);
+                    printk( "Invalid callback type: %d", evt.id);
                     break;
             }
             

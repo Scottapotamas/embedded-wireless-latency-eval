@@ -41,19 +41,15 @@ bool ready_for_use = false;
 
 /* -------------------------------------------------------------------------- */
 
+#define MIN_CONN_INTERVAL   (6)		// (N * 1.25 ms)
+#define MAX_CONN_INTERVAL   (24)	// (N * 1.25 ms)
+#define CONN_LATENCY (0)
+#define SUPERVISION_TIMEOUT (42)	// (N * 10 ms)
+
 #define LOG_MODULE_NAME central_uart
 LOG_MODULE_REGISTER(LOG_MODULE_NAME);
 
 K_SEM_DEFINE(nus_write_sem, 0, 1);
-
-// todo remove this as well
-#define UART_BUF_SIZE 20
-
-struct uart_data_t {
-	void *fifo_reserved;
-	uint8_t  data[UART_BUF_SIZE];
-	uint16_t len;
-};
 
 static struct bt_conn *default_conn;
 static struct bt_nus_client nus_client;
@@ -68,6 +64,7 @@ static void ble_data_sent(struct bt_nus_client *nus, uint8_t err,
 	// When sending we allocated a buffer.
 	// Free it here. This definitely could be cleaner.
 	free(data);       
+	// printk("Sent %iB\n", len);
 
 	if( user_evt_queue )
 	{
@@ -75,7 +72,7 @@ static void ble_data_sent(struct bt_nus_client *nus, uint8_t err,
 		bench_event_send_cb_t *send_cb = &evt.data.send_cb;
 		evt.id = BENCH_SEND_CB;
 		send_cb->bytes_sent = len;
-		k_queue_append(user_evt_queue, &evt );
+		k_msgq_put(user_evt_queue, &evt, K_MSEC(10) );
 	}
 
 	k_sem_give(&nus_write_sem);
@@ -91,9 +88,10 @@ static uint8_t ble_data_received(struct bt_nus_client *nus,
 	ARG_UNUSED(nus);
 
 	// int err;
+	// printk("Rx %iB\n", len);
 
 	// Post an event to the user-space event queue with the inbound data
-	if( user_evt_queue )
+	if( user_evt_queue && len )
 	{
 		bench_event_t evt;
 		evt.id = BENCH_RECV_CB;
@@ -111,26 +109,35 @@ static uint8_t ble_data_received(struct bt_nus_client *nus,
 		// Copy inbound data in
 		memcpy(recv_cb->data, data, len);
 		recv_cb->data_len = len;
+		// printk("Enqueuing %iB\n", len);
 
-		// Put the event into the queue for processing
-		k_queue_append(user_evt_queue, &evt );
+		// Copy the event into the queue for processing
+		k_msgq_put(user_evt_queue, &evt, K_MSEC(10) );
 
 	}
 
 	return BT_GATT_ITER_CONTINUE;
 }
 
+static void ble_unsubscribed(struct bt_nus_client *nus )
+{
+	printk("TX Notify Disabled\n");	
+}
+
 static void discovery_complete(struct bt_gatt_dm *dm,
 			       void *context)
 {
 	struct bt_nus_client *nus = context;
-	LOG_INF("Service discovery completed");
-
+	printk("Service discovery completed\n");
 
 	bt_gatt_dm_data_print(dm);
-
 	bt_nus_handles_assign(dm, nus);
-	bt_nus_subscribe_receive(nus);
+
+	if (bt_nus_subscribe_receive(nus)) {
+		printk("Subscribe failed\n");
+	} else {
+		printk("Subscribed\n");
+	}
 
 	bt_gatt_dm_data_release(dm);
 	ready_for_use = true;
@@ -139,7 +146,7 @@ static void discovery_complete(struct bt_gatt_dm *dm,
 static void discovery_service_not_found(struct bt_conn *conn,
 					void *context)
 {
-	LOG_INF("Service not found");
+	printk("Service not found\n");
 }
 
 static void discovery_error(struct bt_conn *conn,
@@ -173,10 +180,35 @@ static void gatt_discover(struct bt_conn *conn)
 	}
 }
 
-static void exchange_func(struct bt_conn *conn, uint8_t err, struct bt_gatt_exchange_params *params)
+static void le_param_updated(struct bt_conn *conn, uint16_t interval,
+			     uint16_t latency, uint16_t timeout)
+{
+	printk("Connection parameters updated.\n"
+	       " interval: %d, latency: %d, timeout: %d\n",
+	       interval, latency, timeout);
+}
+
+static void le_phy_updated(struct bt_conn *conn,
+			   struct bt_conn_le_phy_info *param)
+{
+	printk("LE PHY updated: TX PHY %s, RX PHY %s\n",
+	       phy2str(param->tx_phy), phy2str(param->rx_phy));
+
+}
+
+static void le_data_length_updated(struct bt_conn *conn,
+				   struct bt_conn_le_data_len_info *info)
+{
+	printk("LE data len updated: TX (len: %d time: %d)"
+	       " RX (len: %d time: %d)\n", info->tx_max_len,
+	       info->tx_max_time, info->rx_max_len, info->rx_max_time);
+}
+
+
+static void mtu_exchange_func(struct bt_conn *conn, uint8_t err, struct bt_gatt_exchange_params *params)
 {
 	if (!err) {
-		LOG_INF("MTU exchange done");
+		printk("MTU exchange done\n");
 	} else {
 		LOG_WRN("MTU exchange failed (err %" PRIu8 ")", err);
 	}
@@ -190,7 +222,7 @@ static void connected(struct bt_conn *conn, uint8_t conn_err)
 	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
 
 	if (conn_err) {
-		LOG_INF("Failed to connect to %s (%d)", addr, conn_err);
+		printk("Failed to connect to %s (%d)\n", addr, conn_err);
 
 		if (default_conn == conn) {
 			bt_conn_unref(default_conn);
@@ -206,9 +238,10 @@ static void connected(struct bt_conn *conn, uint8_t conn_err)
 		return;
 	}
 
-	LOG_INF("Connected: %s", addr);
+	printk("Connected: %s\n", addr);
 
 	static struct bt_gatt_exchange_params exchange_params;
+	exchange_params.func = mtu_exchange_func;
 
 	exchange_params.func = exchange_func;
 	err = bt_gatt_exchange_mtu(conn, &exchange_params);
@@ -221,6 +254,16 @@ static void connected(struct bt_conn *conn, uint8_t conn_err)
 		LOG_WRN("Failed to set security: %d", err);
 
 		gatt_discover(conn);
+	}
+
+	struct bt_le_conn_param *conn_param = BT_LE_CONN_PARAM(	MIN_CONN_INTERVAL, 
+															MAX_CONN_INTERVAL, 
+															CONN_LATENCY,
+															SUPERVISION_TIMEOUT );
+
+	err = bt_conn_le_param_update(default_conn, conn_param);
+	if (err) {
+		LOG_WRN("ITVL exchange failed (err %d)", err);
 	}
 
 	err = bt_scan_stop();
@@ -238,7 +281,7 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 
 	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
 
-	LOG_INF("Disconnected: %s (reason %u)", addr, reason);
+	printk("Disconnected: %s (reason %u)\n", addr, reason);
 
 	if (default_conn != conn) {
 		return;
@@ -261,7 +304,7 @@ static void security_changed(struct bt_conn *conn, bt_security_t level,
 	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
 
 	if (!err) {
-		LOG_INF("Security changed: %s level %u", addr, level);
+		printk("Security changed: %s level %u\n", addr, level);
 	} else {
 		LOG_WRN("Security failed: %s level %u err %d", addr,
 			level, err);
@@ -273,7 +316,8 @@ static void security_changed(struct bt_conn *conn, bt_security_t level,
 BT_CONN_CB_DEFINE(conn_callbacks) = {
 	.connected = connected,
 	.disconnected = disconnected,
-	.security_changed = security_changed
+	.security_changed = security_changed,
+	.le_param_updated = le_param_updated,
 };
 
 static void scan_filter_match(struct bt_scan_device_info *device_info,
@@ -284,7 +328,7 @@ static void scan_filter_match(struct bt_scan_device_info *device_info,
 
 	bt_addr_le_to_str(device_info->recv_info->addr, addr, sizeof(addr));
 
-	LOG_INF("Filters matched. Address: %s connectable: %d",
+	printk("Filters matched. Address: %s connectable: %d\n",
 		addr, connectable);
 }
 
@@ -306,6 +350,7 @@ static int nus_client_init(void)
 		.cb = {
 			.received = ble_data_received,
 			.sent = ble_data_sent,
+			.unsubscribed = ble_unsubscribed,
 		}
 	};
 
@@ -315,7 +360,7 @@ static int nus_client_init(void)
 		return err;
 	}
 
-	LOG_INF("NUS Client module initialized");
+	printk("NUS Client module initialized\n");
 	return err;
 }
 
@@ -344,7 +389,7 @@ static int scan_init(void)
 		return err;
 	}
 
-	LOG_INF("Scan module initialized");
+	printk("Scan module initialized\n");
 	return err;
 }
 
@@ -355,7 +400,7 @@ static void auth_cancel(struct bt_conn *conn)
 
 	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
 
-	LOG_INF("Pairing cancelled: %s", addr);
+	printk("Pairing cancelled: %s\n", addr);
 }
 
 
@@ -365,7 +410,7 @@ static void pairing_complete(struct bt_conn *conn, bool bonded)
 
 	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
 
-	LOG_INF("Pairing completed: %s, bonded: %d", addr, bonded);
+	printk("Pairing completed: %s, bonded: %d\n", addr, bonded);
 }
 
 
@@ -375,7 +420,7 @@ static void pairing_failed(struct bt_conn *conn, enum bt_security_err reason)
 
 	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
 
-	LOG_WRN("Pairing failed conn: %s, reason %d", addr, reason);
+	LOG_WRN("Pairing failed conn: %s, reason %d\n", addr, reason);
 }
 
 static struct bt_conn_auth_cb conn_auth_callbacks = {
@@ -408,7 +453,7 @@ void central_init(void)
 		LOG_ERR("Bluetooth init failed (err %d)", err);
 		return;
 	}
-	LOG_INF("Bluetooth initialized");
+	printk("Bluetooth initialized\n");
 
 	if (IS_ENABLED(CONFIG_SETTINGS)) {
 		settings_load();
@@ -432,7 +477,7 @@ void central_init(void)
 		return;
 	}
 
-	LOG_INF("Scanning successfully started");
+	printk("Scanning successfully started\n");
 }
 
 /* -------------------------------------------------------------------------- */
@@ -441,10 +486,10 @@ void central_init(void)
 
 void central_send_payload( uint8_t *data, uint32_t length )
 {
-	// if( !ready_for_use )
-	// { 
-	// 	return;
-	// }
+	if( !ready_for_use )
+	{ 
+		return;
+	}
 
 	int err;
     uint8_t *buffer = malloc(length * sizeof(uint8_t));
@@ -456,7 +501,7 @@ void central_send_payload( uint8_t *data, uint32_t length )
 			"(err %d)", err);
 		free(buffer);       
 	}
-	// LOG_INF("Sent?");
+	// printk("Sent?\n");
 
 	err = k_sem_take(&nus_write_sem, NUS_WRITE_TIMEOUT);
 	if (err) {

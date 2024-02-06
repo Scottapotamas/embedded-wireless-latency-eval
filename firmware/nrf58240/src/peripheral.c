@@ -42,8 +42,10 @@ LOG_MODULE_REGISTER(LOG_MODULE_NAME);
 #define DEVICE_NAME CONFIG_BT_DEVICE_NAME
 #define DEVICE_NAME_LEN	(sizeof(DEVICE_NAME) - 1)
 
-
-static K_SEM_DEFINE(ble_init_ok, 0, 1);
+#define MIN_CONN_INTERVAL   (6)		// (N * 1.25 ms)
+#define MAX_CONN_INTERVAL   (24)	// (N * 1.25 ms)
+#define CONN_LATENCY (0)
+#define SUPERVISION_TIMEOUT (42)	// (N * 10 ms)
 
 static struct bt_conn *current_conn;
 
@@ -68,9 +70,20 @@ static void connected(struct bt_conn *conn, uint8_t err)
 	}
 
 	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
-	LOG_INF("Connected %s", addr);
+	printk("Connected %s\n", addr);
 
 	current_conn = bt_conn_ref(conn);
+
+	struct bt_le_conn_param *conn_param = BT_LE_CONN_PARAM(	MIN_CONN_INTERVAL, 
+															MAX_CONN_INTERVAL, 
+															CONN_LATENCY,
+															SUPERVISION_TIMEOUT );
+
+	err = bt_conn_le_param_update(current_conn, conn_param);
+	if (err) {
+		LOG_WRN("ITVL exchange failed (err %d)", err);
+	}
+
 }
 
 static void disconnected(struct bt_conn *conn, uint8_t reason)
@@ -79,7 +92,7 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 
 	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
 
-	LOG_INF("Disconnected: %s (reason %u)", addr, reason);
+	printk("Disconnected: %s (reason %u)\n", addr, reason);
 
 	if (current_conn) {
 		bt_conn_unref(current_conn);
@@ -92,14 +105,28 @@ BT_CONN_CB_DEFINE(conn_callbacks) = {
 	.disconnected = disconnected,
 };
 
-static void bt_receive_cb(struct bt_conn *conn, const uint8_t *const data,
+static void ble_send_cb( struct bt_conn *conn )
+{
+	// printk("TxDone?\n");
+
+	if( user_periph_evt_queue )
+	{
+		bench_event_t evt;
+		bench_event_send_cb_t *send_cb = &evt.data.send_cb;
+		evt.id = BENCH_SEND_CB;
+		send_cb->bytes_sent = 0;
+		k_msgq_put(user_periph_evt_queue, &evt, K_MSEC(10) );
+	}
+}
+
+static void ble_receive_cb(struct bt_conn *conn, const uint8_t *const data,
 			  uint16_t len)
 {
 	char addr[BT_ADDR_LE_STR_LEN] = {0};
 	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, ARRAY_SIZE(addr));
-	// LOG_INF("Received %i data from: %s", len, addr);
+	// printk("Received %i data from: %s\n", len, addr);
 
-    if( user_periph_evt_queue )
+    if( user_periph_evt_queue && len )
 	{
 		bench_event_t evt;
 		evt.id = BENCH_RECV_CB;
@@ -119,12 +146,26 @@ static void bt_receive_cb(struct bt_conn *conn, const uint8_t *const data,
 		recv_cb->data_len = len;
 
 		// Copy the event into the queue for processing
-    	k_msgq_put(user_periph_evt_queue, &evt, K_MSEC(1));
+    	k_msgq_put(user_periph_evt_queue, &evt, K_MSEC(10));
+	}
+}
+
+static void ble_notify_enabled(enum bt_nus_send_status status )
+{
+	if(status == BT_NUS_SEND_STATUS_ENABLED)
+	{
+		printk("TX Notify Enabled\n");
+	}
+	else if(status == BT_NUS_SEND_STATUS_DISABLED)
+	{
+		printk("TX Notify Disabled\n");
 	}
 }
 
 static struct bt_nus_cb nus_cb = {
-	.received = bt_receive_cb,
+	.received = ble_receive_cb,
+	.sent = ble_send_cb,
+	.send_enabled = ble_notify_enabled,
 };
 
 /* -------------------------------------------------------------------------- */
@@ -135,14 +176,12 @@ void peripheral_init(void)
 
 	err = bt_enable(NULL);
 
-	LOG_INF("Bluetooth initialized");
-
-	k_sem_give(&ble_init_ok);
+	printk("Bluetooth initialized\n");
 
 	if (IS_ENABLED(CONFIG_SETTINGS)) {
 		settings_load();
 	}
-
+	
 	err = bt_nus_init(&nus_cb);
 	if (err) {
 		LOG_ERR("Failed to initialize UART service (err: %d)", err);
@@ -155,6 +194,9 @@ void peripheral_init(void)
 		LOG_ERR("Advertising failed to start (err %d)", err);
 		return;
 	}
+
+	printk("Bluetooth initialized\n");
+
 }
 
 /* -------------------------------------------------------------------------- */
@@ -165,6 +207,7 @@ void peripheral_send_payload( uint8_t *data, uint32_t length )
     {
         uint8_t *buffer = malloc(length * sizeof(uint8_t));
         memcpy(buffer, data, length);
+		// printk("Sending %iB\n", length);
 
         if( bt_nus_send(NULL, buffer, length) ) {
             LOG_WRN("Failed to send data over BLE connection");
