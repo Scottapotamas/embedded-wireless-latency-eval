@@ -12,9 +12,6 @@ data <- read.csv("module-comparison-data.csv",
                  check.names = FALSE, 
                  stringsAsFactors = FALSE)
 
-# What packet size we're looking at
-packet_size_str = '12B'
-
 # Reshape from wide to long format
 data_long <- data %>%
   pivot_longer(
@@ -26,10 +23,6 @@ data_long <- data %>%
   mutate(packetsize = gsub("-.*", "", category),
          # Create the subgroup column (12B, 128B, 1024B)
          subgroup = gsub(".*-", "", category)) # %>%
-  # filter(packetsize == packet_size_str)
-
-# Order the packetsizes as desired and then convert back to a factor
-# data_long$packetsize <- factor(data_long$packetsize, levels = c("12B", "128B", "1024B"))
 
 # Compute stats
 summary_data <- data_long %>%
@@ -55,38 +48,55 @@ reorder_variable <- summary_data %>%
   filter(packetsize == '12B') %>%
   arrange(-upper_quantile) %>%
   pull(subgroup)
-
+# Apply the new order
 summary_data$subgroup <- factor(summary_data$subgroup, levels = reorder_variable)
 
+# Custom bar colours
 myPalette <- c("12B"="#004c6d", "128B"="#7295b0", "1024B"="#d0e5f8")
-
 
 # Plotting
 p <- summary_data %>% 
-  # mutate(subgroup = reorder(subgroup, -upper_quantile)) %>%
-  # Bar-chart
   ggplot(aes(x = subgroup)) +
-  geom_col( aes(y = upper_quantile, fill = packetsize), 
-            position="identity",
-            alpha = 0.8,
-            width = .6, 
-            
-  ) +
+
+  # Manually draw bars in correct draw order...
+  # 1024B bars
+  geom_col(data = subset(summary_data, packetsize == "1024B"), 
+             aes(y = upper_quantile, fill = packetsize), 
+             position = "identity", 
+             alpha = 0.8,
+             width = .6) +
+  # 128B bars
+  geom_col(data = subset(summary_data, packetsize == "128B"), 
+                  aes(y = upper_quantile, fill = packetsize), 
+                  position = "identity", 
+                  alpha = 0.8,
+                  width = .6) +
+  # 12B bars
+  geom_col(data = subset(summary_data, packetsize == "12B"),
+                  aes(y = upper_quantile, fill = packetsize),
+                  position = "identity",
+                  alpha = 0.8, 
+                  width = .6) +
+  # Label values under each bar
   geom_text(
-    aes(y = upper_quantile, label = as.character(round(upper_quantile, 0))),
+    aes(y = upper_quantile, label = as.character(signif(upper_quantile, 2))),
     family = "Roboto Mono",
-    size = 3.5,
-    vjust = 2.9
+    size = 3.6,
+    vjust = 3.15,
+    alpha = 0.8,
+    check_overlap = TRUE, # prevent overdraw
   ) +
-  # When a value clips offscreen, render it as a text label and arrow
+  # When a value clips offscreen, render it on-canvas as a text label and arrow
   geom_text( aes(y = upper_quantile, 
                  label = ifelse(upper_quantile > 150, as.character(paste(round(upper_quantile, 0), "→")), '')
                  ), 
-             y = 152,
+             y = 149,
+             vjust = 3.15,
              alpha = 0.8,
-             size = 4,
+             size = 3.6,
              family = "Roboto Mono",
              fontface = "bold",
+             
              ) +
   # Manual Legend formatting
   scale_fill_manual(
@@ -99,11 +109,11 @@ p <- summary_data %>%
            size = 4,
            alpha = 0.7,
            x = 9.7, 
-           y = 134, 
+           y = 130, 
            ) +
   # Horizontal layout
   coord_flip(
-    ylim = c(0, 150),
+    ylim = c(0, 146),
     # clip = "on"
   ) +
   # Override x-axis range and ticks
@@ -115,7 +125,7 @@ p <- summary_data %>%
     labs(
       x = NULL,
       y = "Duration (milliseconds)",
-      title = "Overall Latency Results",
+      title = "Wireless Latency Benchmark Results",
       subtitle = "75% of payload transfers complete faster than...",
       caption = "Lower is better."
     ) +
@@ -137,10 +147,10 @@ p <- summary_data %>%
       plot.title = element_text(hjust = 0.5),    # Center the title
       plot.subtitle = element_text(hjust = 0.5, size = 16), # Center the subtitle
       plot.caption = element_text(hjust = 0.5),   # Center the caption
-      axis.text.x = element_text(margin = margin(t = 5, r = 0, b = 15, l = 0)), # +Gap between axis and label
+      axis.text.x = element_text(margin = margin(t = 8, r = 0, b = 15, l = 0)), # +Gap between axis and label
 
       # axis.line.y = element_line(color = "grey", size = 1) # Adjust line thickness
     )
 
-save_plot("test.svg", fig = p, width=30, height=24)
+save_plot("test.svg", fig = p, width=30, height=25)
 
