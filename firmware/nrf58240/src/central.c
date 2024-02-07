@@ -243,7 +243,6 @@ static void connected(struct bt_conn *conn, uint8_t conn_err)
 	static struct bt_gatt_exchange_params exchange_params;
 	exchange_params.func = mtu_exchange_func;
 
-	exchange_params.func = exchange_func;
 	err = bt_gatt_exchange_mtu(conn, &exchange_params);
 	if (err) {
 		LOG_WRN("MTU exchange failed (err %d)", err);
