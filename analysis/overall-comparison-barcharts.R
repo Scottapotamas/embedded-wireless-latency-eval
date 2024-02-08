@@ -111,6 +111,13 @@ p <- summary_data %>%
            x = 9.7, 
            y = 130, 
            ) +
+  annotate("text", 
+           label = "*Tested indoors, 1m range",
+           size = 4,
+           alpha = 0.7,
+           x = 9.3, 
+           y = 132.5, 
+  ) +
   # Horizontal layout
   coord_flip(
     ylim = c(0, 146),
