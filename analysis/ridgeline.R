@@ -65,7 +65,7 @@ p <- data_long %>%
   stat_summary(
     geom = "text",
     fun = "median",
-    aes(label = round(..y.., 1)),
+    aes(label = round(..y.., 2)),
     family = "Roboto Mono",
     fontface = "bold",
     size = 5,
@@ -81,7 +81,7 @@ p <- data_long %>%
     vjust = 1.5,
     hjust = -0.4
   ) +
-  coord_flip() +
+  coord_flip( ylim = c(0, NA), clip = "off" ) +
   # Override x-axis range and ticks
   scale_y_continuous(
     limits = c(0, 195),

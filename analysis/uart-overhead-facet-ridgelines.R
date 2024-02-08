@@ -54,7 +54,7 @@ p <- data_long %>%
     normalize = "groups",
     scale = 0.75,
     height = 0.75,
-    width = .4, 
+    width = .3, 
     .width = 0,
     justification = -.8,
     alpha = 0.70,
@@ -64,7 +64,7 @@ p <- data_long %>%
   #Boxplot
   geom_boxplot(
     aes(),
-    width = .3,
+    width = .2,
     outlier.colour = 'black',
     outlier.alpha = 0.6,
     outlier.size = 0.4,
@@ -97,11 +97,11 @@ p <- data_long %>%
   # Separate facet for each baudrate
   # One column layout
   facet_grid(
-    baudrate ~ ., 
-    scales = "fixed", 
+    baudrate ~ .,
+    scales = "fixed",
     space = "fixed",
     switch = "y",
-) + 
+) +
   # Horizontal layout
   coord_flip( 
     # Specify y-axis limit now, this approach ensures boxplot/dist curves
