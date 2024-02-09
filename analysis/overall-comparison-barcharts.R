@@ -79,7 +79,7 @@ p <- summary_data %>%
                   width = .6) +
   # Label values under each bar
   geom_text(
-    aes(y = upper_quantile, label = as.character(signif(upper_quantile, 2))),
+    aes(y = upper_quantile, label = ifelse(upper_quantile > 20, as.character(signif(upper_quantile, 3)), as.character(signif(upper_quantile, 2)))),
     family = "Roboto Mono",
     size = 3.6,
     vjust = 3.15,
